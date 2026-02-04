@@ -55,9 +55,17 @@ impl RenderBackend for CpuBackend {
         }
 
         for pass in &plan.passes {
-            let Pass::Scene(scene) = pass;
-            for op in &scene.ops {
-                draw_op(self, &mut ctx, op, assets)?;
+            match pass {
+                Pass::Scene(scene) => {
+                    for op in &scene.ops {
+                        draw_op(self, &mut ctx, op, assets)?;
+                    }
+                }
+                Pass::Offscreen(_) | Pass::Composite(_) => {
+                    return Err(WavyteError::evaluation(
+                        "cpu backend does not support multi-pass plans yet (phase 5)",
+                    ));
+                }
             }
         }
 

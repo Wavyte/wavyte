@@ -140,9 +140,17 @@ impl RenderBackend for VelloBackend {
         self.scene.reset();
 
         for pass in &plan.passes {
-            let Pass::Scene(scene_pass) = pass;
-            for op in &scene_pass.ops {
-                encode_op(self, op, plan.canvas.width, plan.canvas.height, assets)?;
+            match pass {
+                Pass::Scene(scene_pass) => {
+                    for op in &scene_pass.ops {
+                        encode_op(self, op, plan.canvas.width, plan.canvas.height, assets)?;
+                    }
+                }
+                Pass::Offscreen(_) | Pass::Composite(_) => {
+                    return Err(WavyteError::evaluation(
+                        "gpu backend does not support multi-pass plans yet (phase 5)",
+                    ));
+                }
             }
         }
 

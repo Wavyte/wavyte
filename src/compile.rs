@@ -3,24 +3,79 @@ use crate::{
     core::{Affine, BezPath, Canvas, Rgba8Premul},
     error::{WavyteError, WavyteResult},
     eval::EvaluatedGraph,
+    fx::PassFx,
     model::{Asset, BlendMode, Composition},
+    transitions::WipeDir,
 };
 
 #[derive(Clone, Debug)]
 pub struct RenderPlan {
     pub canvas: Canvas,
+    pub surfaces: Vec<SurfaceDesc>,
     pub passes: Vec<Pass>,
+    pub final_surface: SurfaceId,
 }
 
 #[derive(Clone, Debug)]
 pub enum Pass {
     Scene(ScenePass),
+    Offscreen(OffscreenPass),
+    Composite(CompositePass),
 }
 
 #[derive(Clone, Debug)]
 pub struct ScenePass {
+    pub target: SurfaceId,
     pub ops: Vec<DrawOp>,
-    pub clear: Option<Rgba8Premul>,
+    pub clear_to_transparent: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SurfaceId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PixelFormat {
+    Rgba8Premul,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SurfaceDesc {
+    pub width: u32,
+    pub height: u32,
+    pub format: PixelFormat,
+}
+
+#[derive(Clone, Debug)]
+pub struct OffscreenPass {
+    pub input: SurfaceId,
+    pub output: SurfaceId,
+    pub fx: PassFx,
+}
+
+#[derive(Clone, Debug)]
+pub struct CompositePass {
+    pub target: SurfaceId,
+    pub ops: Vec<CompositeOp>,
+}
+
+#[derive(Clone, Debug)]
+pub enum CompositeOp {
+    Over {
+        src: SurfaceId,
+        opacity: f32,
+    },
+    Crossfade {
+        a: SurfaceId,
+        b: SurfaceId,
+        t: f32,
+    },
+    Wipe {
+        a: SurfaceId,
+        b: SurfaceId,
+        t: f32,
+        dir: WipeDir,
+        soft_edge: f32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -136,7 +191,17 @@ pub fn compile_frame(
 
     Ok(RenderPlan {
         canvas: comp.canvas,
-        passes: vec![Pass::Scene(ScenePass { ops, clear: None })],
+        surfaces: vec![SurfaceDesc {
+            width: comp.canvas.width,
+            height: comp.canvas.height,
+            format: PixelFormat::Rgba8Premul,
+        }],
+        passes: vec![Pass::Scene(ScenePass {
+            target: SurfaceId(0),
+            ops,
+            clear_to_transparent: false,
+        })],
+        final_surface: SurfaceId(0),
     })
 }
 
@@ -227,7 +292,9 @@ mod tests {
 
         let eval = Evaluator::eval_frame(&comp, FrameIndex(1)).unwrap();
         let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
-        let Pass::Scene(scene) = &plan.passes[0];
+        let Pass::Scene(scene) = &plan.passes[0] else {
+            panic!("expected Scene pass");
+        };
         assert_eq!(scene.ops.len(), 1);
         match &scene.ops[0] {
             DrawOp::FillPath { opacity, .. } => {
