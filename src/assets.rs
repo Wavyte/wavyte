@@ -12,6 +12,7 @@ use crate::{
     model,
 };
 
+/// A decoded and prepared image in premultiplied RGBA8 format.
 #[derive(Clone, Debug)]
 pub struct PreparedImage {
     pub width: u32,
@@ -20,11 +21,13 @@ pub struct PreparedImage {
     pub rgba8_premul: Arc<Vec<u8>>,
 }
 
+/// A parsed SVG document (vector) as a `usvg::Tree`.
 #[derive(Clone, Debug)]
 pub struct PreparedSvg {
     pub tree: Arc<usvg::Tree>,
 }
 
+/// RGBA8 brush used by the text layout engine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextBrushRgba8 {
     pub r: u8,
@@ -33,6 +36,10 @@ pub struct TextBrushRgba8 {
     pub a: u8,
 }
 
+/// A prepared text asset: a Parley layout plus the font bytes used to build it.
+///
+/// Keeping `font_bytes` inside the prepared asset avoids renderer-side IO. Renderers can shape/draw
+/// glyphs using the provided bytes without knowing where they came from.
 #[derive(Clone)]
 pub struct PreparedText {
     pub layout: Arc<parley::Layout<TextBrushRgba8>>,
@@ -55,6 +62,9 @@ pub enum PreparedAsset {
     Text(PreparedText),
 }
 
+/// Stable identifier for a prepared asset.
+///
+/// In v0.1.0 this is a deterministic FNV-1a hash over a normalized [`AssetKey`] and parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AssetId(pub(crate) u64);
 
@@ -68,6 +78,7 @@ impl AssetId {
     }
 }
 
+/// Normalized asset key plus parameters used to derive an [`AssetId`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AssetKey {
     pub norm_path: String,
@@ -81,12 +92,24 @@ impl AssetKey {
     }
 }
 
+/// Abstraction over external asset IO and decoding.
+///
+/// Renderers and the compiler must not touch the filesystem or network directly. They only request
+/// assets through this trait, which returns already-prepared assets suitable for rendering.
 pub trait AssetCache {
+    /// Get a stable [`AssetId`] for an asset.
     fn id_for(&mut self, asset: &model::Asset) -> WavyteResult<AssetId>;
+    /// Load and prepare an asset (memoized).
     fn get_or_load(&mut self, asset: &model::Asset) -> WavyteResult<PreparedAsset>;
+    /// Load and prepare an asset by its stable [`AssetId`] (memoized).
     fn get_or_load_by_id(&mut self, id: AssetId) -> WavyteResult<PreparedAsset>;
 }
 
+/// Filesystem-backed asset cache.
+///
+/// - Roots all asset loads at `root`
+/// - Normalizes relative paths into a stable form (OS-agnostic)
+/// - Memoizes decoded and prepared results across frames
 pub struct FsAssetCache {
     root: PathBuf,
     keys_by_id: HashMap<AssetId, AssetKey>,
@@ -97,6 +120,7 @@ pub struct FsAssetCache {
 }
 
 impl FsAssetCache {
+    /// Create a new filesystem-backed cache rooted at `root`.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),

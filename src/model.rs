@@ -8,6 +8,14 @@ use crate::{
 };
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// A complete timeline composition.
+///
+/// A composition is a pure data model that can be:
+/// - built programmatically (see [`crate::CompositionBuilder`])
+/// - serialized/deserialized via Serde (JSON)
+///
+/// Rendering a composition is performed by the pipeline:
+/// [`crate::render_frame`] / [`crate::render_to_mp4`].
 pub struct Composition {
     pub fps: Fps,
     pub canvas: Canvas,
@@ -18,6 +26,7 @@ pub struct Composition {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// A track contains an ordered set of clips with a base Z offset.
 pub struct Track {
     pub name: String,
     pub z_base: i32,
@@ -25,6 +34,7 @@ pub struct Track {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// A clip places an asset on the timeline and specifies how it is rendered.
 pub struct Clip {
     pub id: String,
     pub asset: String,     // key into Composition.assets
@@ -37,6 +47,7 @@ pub struct Clip {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// Per-clip render properties (animated).
 pub struct ClipProps {
     pub transform: Anim<Transform2D>,
     pub opacity: Anim<f64>, // 0..1 clamped in eval
@@ -44,11 +55,16 @@ pub struct ClipProps {
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+/// Blend mode used when compositing a clip.
 pub enum BlendMode {
+    /// Standard “source over destination” (premultiplied alpha).
     Normal,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// An asset referenced by clips.
+///
+/// Some asset kinds (audio/video) exist in the model but are not renderable in v0.1.0.
 pub enum Asset {
     Text(TextAsset),
     Svg(SvgAsset),

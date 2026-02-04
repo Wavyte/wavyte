@@ -9,6 +9,15 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
+/// Backend-agnostic render plan for a single frame.
+///
+/// A plan consists of:
+/// - surface declarations (`surfaces`)
+/// - a sequence of passes (`passes`)
+/// - a declared final surface (`final_surface`)
+///
+/// The plan is designed to be executable by multiple backends (CPU and GPU) with the same
+/// semantics.
 pub struct RenderPlan {
     pub canvas: Canvas,
     pub surfaces: Vec<SurfaceDesc>,
@@ -17,6 +26,7 @@ pub struct RenderPlan {
 }
 
 #[derive(Clone, Debug)]
+/// A single pass in a [`RenderPlan`].
 pub enum Pass {
     Scene(ScenePass),
     Offscreen(OffscreenPass),
@@ -24,6 +34,7 @@ pub enum Pass {
 }
 
 #[derive(Clone, Debug)]
+/// Draw operations into a surface.
 pub struct ScenePass {
     pub target: SurfaceId,
     pub ops: Vec<DrawOp>,
@@ -31,14 +42,17 @@ pub struct ScenePass {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Identifier for a render surface declared in [`RenderPlan::surfaces`].
 pub struct SurfaceId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Supported pixel formats for render surfaces.
 pub enum PixelFormat {
     Rgba8Premul,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Surface declaration: dimensions + pixel format.
 pub struct SurfaceDesc {
     pub width: u32,
     pub height: u32,
@@ -46,6 +60,7 @@ pub struct SurfaceDesc {
 }
 
 #[derive(Clone, Debug)]
+/// Run a post-processing effect producing a new surface from an input surface.
 pub struct OffscreenPass {
     pub input: SurfaceId,
     pub output: SurfaceId,
@@ -53,12 +68,14 @@ pub struct OffscreenPass {
 }
 
 #[derive(Clone, Debug)]
+/// Composite multiple surfaces into a target surface.
 pub struct CompositePass {
     pub target: SurfaceId,
     pub ops: Vec<CompositeOp>,
 }
 
 #[derive(Clone, Debug)]
+/// A compositing operation between surfaces.
 pub enum CompositeOp {
     Over {
         src: SurfaceId,
@@ -79,6 +96,7 @@ pub enum CompositeOp {
 }
 
 #[derive(Clone, Debug)]
+/// Draw operation emitted by the compiler.
 pub enum DrawOp {
     FillPath {
         path: BezPath,

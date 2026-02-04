@@ -8,6 +8,7 @@ use crate::{
     render::FrameRGBA,
 };
 
+/// Configuration for MP4 encoding via the system `ffmpeg` binary.
 #[derive(Clone, Debug)]
 pub struct EncodeConfig {
     pub width: u32,
@@ -18,6 +19,7 @@ pub struct EncodeConfig {
 }
 
 impl EncodeConfig {
+    /// Validate invariants required by the current MP4 encoder configuration.
     pub fn validate(&self) -> WavyteResult<()> {
         if self.width == 0 || self.height == 0 {
             return Err(WavyteError::validation(
@@ -36,12 +38,14 @@ impl EncodeConfig {
         Ok(())
     }
 
+    /// Return a copy of this config with a new output path.
     pub fn with_out_path(mut self, out_path: impl Into<PathBuf>) -> Self {
         self.out_path = out_path.into();
         self
     }
 }
 
+/// Create the default MP4 encoding config used by Wavyte’s pipeline APIs.
 pub fn default_mp4_config(
     out_path: impl Into<PathBuf>,
     width: u32,
@@ -57,6 +61,7 @@ pub fn default_mp4_config(
     }
 }
 
+/// Check whether `ffmpeg` appears to be available on `PATH`.
 pub fn is_ffmpeg_on_path() -> bool {
     std::process::Command::new("ffmpeg")
         .arg("-version")
@@ -67,6 +72,7 @@ pub fn is_ffmpeg_on_path() -> bool {
         .unwrap_or(false)
 }
 
+/// Create the parent directory for `path` if it does not exist.
 pub fn ensure_parent_dir(path: &Path) -> WavyteResult<()> {
     if let Some(parent) = path.parent() {
         use anyhow::Context as _;
@@ -76,6 +82,11 @@ pub fn ensure_parent_dir(path: &Path) -> WavyteResult<()> {
     Ok(())
 }
 
+/// Streaming MP4 encoder that wraps the system `ffmpeg` binary.
+///
+/// This encoder spawns `ffmpeg` and writes raw RGBA frames to stdin.
+/// It is intentionally implemented without linking to FFmpeg libraries to avoid native dependency
+/// requirements at compile time.
 pub struct FfmpegEncoder {
     cfg: EncodeConfig,
     bg_rgba: [u8; 4],
@@ -85,6 +96,7 @@ pub struct FfmpegEncoder {
 }
 
 impl FfmpegEncoder {
+    /// Spawn `ffmpeg` and prepare to accept frames.
     pub fn new(cfg: EncodeConfig, bg_rgba: [u8; 4]) -> WavyteResult<Self> {
         cfg.validate()?;
         ensure_parent_dir(&cfg.out_path)?;
@@ -158,6 +170,10 @@ impl FfmpegEncoder {
         })
     }
 
+    /// Encode a single rendered frame.
+    ///
+    /// Wavyte renderers output premultiplied RGBA8 by default; this method can flatten either
+    /// premultiplied or straight-alpha input over `bg_rgba`.
     pub fn encode_frame(&mut self, frame: &FrameRGBA) -> WavyteResult<()> {
         if frame.width != self.cfg.width || frame.height != self.cfg.height {
             return Err(WavyteError::validation(format!(
@@ -193,6 +209,7 @@ impl FfmpegEncoder {
         Ok(())
     }
 
+    /// Finalize the stream and wait for `ffmpeg` to exit.
     pub fn finish(mut self) -> WavyteResult<()> {
         drop(self.stdin.take());
 

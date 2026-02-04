@@ -9,6 +9,16 @@ use crate::{
     render_passes::execute_plan,
 };
 
+/// Evaluate + compile + render a single frame.
+///
+/// This is the primary “one-shot” API for producing pixels from a [`Composition`].
+///
+/// Pipeline:
+/// 1. [`Evaluator::eval_frame`](crate::Evaluator::eval_frame)
+/// 2. [`compile_frame`](crate::compile_frame)
+/// 3. [`RenderBackend::render_plan`](crate::RenderBackend::render_plan)
+///
+/// Returns a [`FrameRGBA`] containing **premultiplied** RGBA8 pixels.
 pub fn render_frame(
     comp: &Composition,
     frame: FrameIndex,
@@ -20,6 +30,9 @@ pub fn render_frame(
     execute_plan(backend, &plan, assets)
 }
 
+/// Render a range of frames (inclusive start, exclusive end).
+///
+/// This is a convenience wrapper that repeatedly calls [`render_frame`].
 pub fn render_frames(
     comp: &Composition,
     range: FrameRange,
@@ -38,10 +51,16 @@ pub fn render_frames(
     Ok(out)
 }
 
+/// Options for [`render_to_mp4`].
+///
+/// `bg_rgba` is used when flattening alpha for the encoder.
 #[derive(Clone, Debug)]
 pub struct RenderToMp4Opts {
+    /// Frame range to render (start inclusive, end exclusive).
     pub range: FrameRange,
+    /// Background color to flatten alpha over (RGBA8, straight alpha).
     pub bg_rgba: [u8; 4],
+    /// Whether to overwrite `out_path` if it already exists.
     pub overwrite: bool,
 }
 
@@ -58,6 +77,14 @@ impl Default for RenderToMp4Opts {
     }
 }
 
+/// Render a composition to an MP4 by invoking the system `ffmpeg` binary.
+///
+/// `ffmpeg` must be installed and on `PATH`. This function checks for it up front and returns an
+/// error if it is not available.
+///
+/// Notes:
+/// - v0.1.0 currently requires integer FPS (`comp.fps.den == 1`) for MP4 output.
+/// - Frames are rendered as premultiplied RGBA8; the encoder can flatten alpha over `bg_rgba`.
 pub fn render_to_mp4(
     comp: &Composition,
     out_path: impl Into<std::path::PathBuf>,
