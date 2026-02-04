@@ -6,6 +6,7 @@ use crate::{
     error::{WavyteError, WavyteResult},
     render::{FrameRGBA, RenderBackend, RenderSettings},
     render_passes::PassBackend,
+    svg_raster::{SvgRasterKey, rasterize_svg_to_premul_rgba8, svg_raster_params},
 };
 
 struct GpuSurface {
@@ -47,6 +48,7 @@ pub struct VelloBackend {
     blur_temp: Option<GpuSurface>,
 
     image_cache: HashMap<AssetId, vello::peniko::ImageData>,
+    svg_cache: HashMap<crate::svg_raster::SvgRasterKey, vello::peniko::ImageData>,
     font_cache: HashMap<AssetId, vello::peniko::FontData>,
 }
 
@@ -67,6 +69,7 @@ impl VelloBackend {
             blur: None,
             blur_temp: None,
             image_cache: HashMap::new(),
+            svg_cache: HashMap::new(),
             font_cache: HashMap::new(),
         })
     }
@@ -1051,8 +1054,30 @@ fn encode_op(
             let PreparedAsset::Svg(svg) = prepared else {
                 return Err(WavyteError::evaluation("AssetId is not a PreparedSvg"));
             };
-            let svg_scene = vello_svg::render_tree(&svg.tree);
-            backend.scene.append(&svg_scene, Some(*transform));
+
+            // Correctness-first: rasterize SVG (including text) via resvg for both CPU and GPU.
+            let (w, h, transform_adjust) = svg_raster_params(&svg.tree, *transform)?;
+            let key = SvgRasterKey {
+                asset: *asset,
+                width: w,
+                height: h,
+            };
+            let img = if let Some(cached) = backend.svg_cache.get(&key) {
+                cached.clone()
+            } else {
+                let rgba8_premul = rasterize_svg_to_premul_rgba8(&svg.tree, w, h)?;
+                let data = vello::peniko::Blob::from(rgba8_premul);
+                let image = vello::peniko::ImageData {
+                    data,
+                    format: vello::peniko::ImageFormat::Rgba8,
+                    alpha_type: vello::peniko::ImageAlphaType::AlphaPremultiplied,
+                    width: w,
+                    height: h,
+                };
+                backend.svg_cache.insert(key, image.clone());
+                image
+            };
+            backend.scene.draw_image(&img, transform_adjust);
 
             if *opacity < 1.0 {
                 backend.scene.pop_layer();
