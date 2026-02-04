@@ -20,7 +20,10 @@ pub use assets::{
     PreparedText, TextBrushRgba8, TextLayoutEngine,
 };
 pub use assets_decode::{decode_image, parse_svg};
-pub use core::{Canvas, Fps, FrameIndex, FrameRange, Rgba8Premul, Transform2D, Vec2};
+pub use core::{
+    Affine, BezPath, Canvas, Fps, FrameIndex, FrameRange, Point, Rect, Rgba8Premul, Transform2D,
+    Vec2,
+};
 pub use dsl::{ClipBuilder, CompositionBuilder, TrackBuilder};
 pub use error::{WavyteError, WavyteResult};
 pub use eval::{EvaluatedClipNode, EvaluatedGraph, Evaluator, ResolvedEffect, ResolvedTransition};

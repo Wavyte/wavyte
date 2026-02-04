@@ -1,6 +1,6 @@
 use crate::error::{WavyteError, WavyteResult};
 
-pub use kurbo::Vec2;
+pub use kurbo::{Affine, BezPath, Point, Rect, Vec2};
 
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
