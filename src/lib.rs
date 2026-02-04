@@ -15,7 +15,9 @@ mod model;
 pub use anim::{Anim, InterpMode, Keyframe, Keyframes, LoopMode, SampleCtx};
 pub use anim_ease::Ease;
 pub use anim_ops::{delay, loop_, mix, reverse, sequence, speed, stagger};
-pub use assets::{PreparedImage, PreparedSvg};
+pub use assets::{
+    AssetCache, AssetId, AssetKey, FsAssetCache, PreparedAsset, PreparedImage, PreparedSvg,
+};
 pub use assets_decode::{decode_image, parse_svg};
 pub use core::{Canvas, Fps, FrameIndex, FrameRange, Rgba8Premul, Transform2D, Vec2};
 pub use dsl::{ClipBuilder, CompositionBuilder, TrackBuilder};
