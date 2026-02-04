@@ -6,6 +6,7 @@ pub mod anim_ops;
 pub mod anim_proc;
 pub mod core;
 pub mod error;
+pub mod model;
 
 pub use anim::Anim;
 pub use anim_ease::Ease;
