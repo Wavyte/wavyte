@@ -59,4 +59,6 @@ pub use render_passes::{PassBackend, execute_plan};
 pub use transitions::{TransitionKind, WipeDir, parse_transition};
 
 #[cfg(feature = "ffmpeg")]
-pub use encode_ffmpeg::{EncodeConfig, default_mp4_config, ensure_parent_dir, is_ffmpeg_on_path};
+pub use encode_ffmpeg::{
+    EncodeConfig, FfmpegEncoder, default_mp4_config, ensure_parent_dir, is_ffmpeg_on_path,
+};
