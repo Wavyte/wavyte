@@ -97,9 +97,46 @@ impl PassBackend for CpuBackend {
 
     fn exec_offscreen(
         &mut self,
-        _pass: &crate::compile::OffscreenPass,
+        pass: &crate::compile::OffscreenPass,
         _assets: &mut dyn AssetCache,
     ) -> WavyteResult<()> {
+        let mut output = self.surfaces.remove(&pass.output).ok_or_else(|| {
+            WavyteError::evaluation(format!(
+                "offscreen output surface {:?} was not initialized",
+                pass.output
+            ))
+        })?;
+
+        let (w, h) = (u32::from(output.width), u32::from(output.height));
+        let input_bytes = if pass.input == pass.output {
+            output.pixmap.data_as_u8_slice().to_vec()
+        } else {
+            let input = self.surfaces.get(&pass.input).ok_or_else(|| {
+                WavyteError::evaluation(format!(
+                    "offscreen input surface {:?} was not initialized",
+                    pass.input
+                ))
+            })?;
+            if input.width != output.width || input.height != output.height {
+                return Err(WavyteError::evaluation(
+                    "offscreen input/output surface size mismatch",
+                ));
+            }
+            input.pixmap.data_as_u8_slice().to_vec()
+        };
+
+        match pass.fx {
+            crate::fx::PassFx::Blur { radius_px, sigma } => {
+                let blurred =
+                    crate::blur_cpu::blur_rgba8_premul(&input_bytes, w, h, radius_px, sigma)?;
+                output
+                    .pixmap
+                    .data_as_u8_slice_mut()
+                    .copy_from_slice(&blurred);
+            }
+        }
+
+        self.surfaces.insert(pass.output, output);
         Ok(())
     }
 
