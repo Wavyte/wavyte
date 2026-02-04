@@ -6,6 +6,7 @@ use crate::{
     eval::Evaluator,
     model::Composition,
     render::{FrameRGBA, RenderBackend},
+    render_passes::execute_plan,
 };
 
 pub fn render_frame(
@@ -16,5 +17,5 @@ pub fn render_frame(
 ) -> WavyteResult<FrameRGBA> {
     let eval = Evaluator::eval_frame(comp, frame)?;
     let plan = compile_frame(comp, &eval, assets)?;
-    backend.render_plan(&plan, assets)
+    execute_plan(backend, &plan, assets)
 }

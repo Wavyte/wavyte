@@ -2,6 +2,7 @@ use crate::{
     assets::AssetCache,
     compile::RenderPlan,
     error::{WavyteError, WavyteResult},
+    render_passes::{PassBackend, execute_plan},
 };
 
 #[derive(Clone, Debug)]
@@ -12,12 +13,14 @@ pub struct FrameRGBA {
     pub premultiplied: bool,
 }
 
-pub trait RenderBackend {
+pub trait RenderBackend: PassBackend {
     fn render_plan(
         &mut self,
         plan: &RenderPlan,
         assets: &mut dyn AssetCache,
-    ) -> WavyteResult<FrameRGBA>;
+    ) -> WavyteResult<FrameRGBA> {
+        execute_plan(self, plan, assets)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

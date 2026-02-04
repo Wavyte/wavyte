@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use crate::{
     assets::{AssetCache, AssetId, PreparedAsset},
-    compile::{DrawOp, Pass, RenderPlan},
+    compile::{DrawOp, SurfaceDesc, SurfaceId},
     error::{WavyteError, WavyteResult},
     render::{FrameRGBA, RenderBackend, RenderSettings},
+    render_passes::PassBackend,
 };
 
 pub struct VelloBackend {
@@ -129,39 +130,87 @@ impl VelloBackend {
     }
 }
 
-impl RenderBackend for VelloBackend {
-    fn render_plan(
-        &mut self,
-        plan: &RenderPlan,
-        assets: &mut dyn AssetCache,
-    ) -> WavyteResult<FrameRGBA> {
-        self.ensure_init(plan.canvas.width, plan.canvas.height)?;
-
+impl PassBackend for VelloBackend {
+    fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()> {
+        if id != SurfaceId(0) {
+            return Ok(());
+        }
+        self.ensure_init(desc.width, desc.height)?;
         self.scene.reset();
+        Ok(())
+    }
 
-        for pass in &plan.passes {
-            match pass {
-                Pass::Scene(scene_pass) => {
-                    for op in &scene_pass.ops {
-                        encode_op(self, op, plan.canvas.width, plan.canvas.height, assets)?;
-                    }
-                }
-                Pass::Offscreen(_) | Pass::Composite(_) => {}
-            }
+    fn exec_scene(
+        &mut self,
+        pass: &crate::compile::ScenePass,
+        assets: &mut dyn AssetCache,
+    ) -> WavyteResult<()> {
+        let _ = pass.target;
+        let _ = pass.clear_to_transparent;
+        for op in &pass.ops {
+            encode_op(self, op, self.width, self.height, assets)?;
+        }
+        Ok(())
+    }
+
+    fn exec_offscreen(
+        &mut self,
+        _pass: &crate::compile::OffscreenPass,
+        _assets: &mut dyn AssetCache,
+    ) -> WavyteResult<()> {
+        Ok(())
+    }
+
+    fn exec_composite(
+        &mut self,
+        _pass: &crate::compile::CompositePass,
+        _assets: &mut dyn AssetCache,
+    ) -> WavyteResult<()> {
+        Ok(())
+    }
+
+    fn readback_rgba8(
+        &mut self,
+        surface: SurfaceId,
+        plan: &crate::compile::RenderPlan,
+        _assets: &mut dyn AssetCache,
+    ) -> WavyteResult<FrameRGBA> {
+        if surface != SurfaceId(0) {
+            return Err(WavyteError::evaluation(
+                "gpu backend readback is only supported for surface 0 in this phase",
+            ));
         }
 
-        let device = self.device.as_ref().unwrap();
-        let queue = self.queue.as_ref().unwrap();
-        let target_view = self.target_view.as_ref().unwrap();
-        let readback = self.readback.as_ref().unwrap();
-        let target_tex = self.target_texture.as_ref().unwrap();
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        let queue = self
+            .queue
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        let target_view = self
+            .target_view
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        let readback = self
+            .readback
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        let target_tex = self
+            .target_texture
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
 
         let base_color = match self.settings.clear_rgba {
             Some([r, g, b, a]) => vello::peniko::Color::from_rgba8(r, g, b, a),
             None => vello::peniko::Color::from_rgba8(0, 0, 0, 0),
         };
 
-        let renderer = self.renderer.as_mut().unwrap();
+        let renderer = self
+            .renderer
+            .as_mut()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
         renderer
             .render_to_texture(
                 device,
@@ -234,6 +283,8 @@ impl RenderBackend for VelloBackend {
         })
     }
 }
+
+impl RenderBackend for VelloBackend {}
 
 fn align_to(value: u32, alignment: u32) -> u32 {
     let mask = alignment - 1;

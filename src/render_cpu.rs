@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use crate::{
     assets::{AssetCache, AssetId, PreparedAsset},
-    compile::{DrawOp, Pass, RenderPlan},
+    compile::{DrawOp, SurfaceDesc, SurfaceId},
     error::{WavyteError, WavyteResult},
     render::{FrameRGBA, RenderBackend, RenderSettings},
+    render_passes::PassBackend,
 };
 
 pub struct CpuBackend {
@@ -12,6 +13,7 @@ pub struct CpuBackend {
     image_cache: HashMap<AssetId, vello_cpu::Image>,
     svg_cache: HashMap<AssetId, vello_cpu::Image>,
     font_cache: HashMap<AssetId, vello_cpu::peniko::FontData>,
+    ctx: Option<vello_cpu::RenderContext>,
 }
 
 impl CpuBackend {
@@ -21,29 +23,27 @@ impl CpuBackend {
             image_cache: HashMap::new(),
             svg_cache: HashMap::new(),
             font_cache: HashMap::new(),
+            ctx: None,
         }
     }
 }
 
-impl RenderBackend for CpuBackend {
-    fn render_plan(
-        &mut self,
-        plan: &RenderPlan,
-        assets: &mut dyn AssetCache,
-    ) -> WavyteResult<FrameRGBA> {
-        let width_u16: u16 = plan
-            .canvas
+impl PassBackend for CpuBackend {
+    fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()> {
+        if id != SurfaceId(0) {
+            return Ok(());
+        }
+
+        let width_u16: u16 = desc
             .width
             .try_into()
             .map_err(|_| WavyteError::evaluation("canvas width exceeds u16"))?;
-        let height_u16: u16 = plan
-            .canvas
+        let height_u16: u16 = desc
             .height
             .try_into()
             .map_err(|_| WavyteError::evaluation("canvas height exceeds u16"))?;
 
         let mut ctx = vello_cpu::RenderContext::new(width_u16, height_u16);
-
         if let Some([r, g, b, a]) = self.settings.clear_rgba {
             ctx.set_paint(vello_cpu::peniko::Color::from_rgba8(r, g, b, a));
             ctx.fill_rect(&vello_cpu::kurbo::Rect::new(
@@ -54,16 +54,72 @@ impl RenderBackend for CpuBackend {
             ));
         }
 
-        for pass in &plan.passes {
-            match pass {
-                Pass::Scene(scene) => {
-                    for op in &scene.ops {
-                        draw_op(self, &mut ctx, op, assets)?;
-                    }
-                }
-                Pass::Offscreen(_) | Pass::Composite(_) => {}
-            }
+        self.ctx = Some(ctx);
+        Ok(())
+    }
+
+    fn exec_scene(
+        &mut self,
+        pass: &crate::compile::ScenePass,
+        assets: &mut dyn AssetCache,
+    ) -> WavyteResult<()> {
+        let mut ctx = self
+            .ctx
+            .take()
+            .ok_or_else(|| WavyteError::evaluation("cpu backend surface 0 was not initialized"))?;
+
+        let _ = pass.target;
+        let _ = pass.clear_to_transparent;
+        for op in &pass.ops {
+            draw_op(self, &mut ctx, op, assets)?;
         }
+        self.ctx = Some(ctx);
+        Ok(())
+    }
+
+    fn exec_offscreen(
+        &mut self,
+        _pass: &crate::compile::OffscreenPass,
+        _assets: &mut dyn AssetCache,
+    ) -> WavyteResult<()> {
+        Ok(())
+    }
+
+    fn exec_composite(
+        &mut self,
+        _pass: &crate::compile::CompositePass,
+        _assets: &mut dyn AssetCache,
+    ) -> WavyteResult<()> {
+        Ok(())
+    }
+
+    fn readback_rgba8(
+        &mut self,
+        surface: SurfaceId,
+        plan: &crate::compile::RenderPlan,
+        _assets: &mut dyn AssetCache,
+    ) -> WavyteResult<FrameRGBA> {
+        if surface != SurfaceId(0) {
+            return Err(WavyteError::evaluation(
+                "cpu backend readback is only supported for surface 0 in this phase",
+            ));
+        }
+
+        let mut ctx = self
+            .ctx
+            .take()
+            .ok_or_else(|| WavyteError::evaluation("cpu backend surface 0 was not initialized"))?;
+
+        let width_u16: u16 = plan
+            .canvas
+            .width
+            .try_into()
+            .map_err(|_| WavyteError::evaluation("canvas width exceeds u16"))?;
+        let height_u16: u16 = plan
+            .canvas
+            .height
+            .try_into()
+            .map_err(|_| WavyteError::evaluation("canvas height exceeds u16"))?;
 
         ctx.flush();
         let mut pixmap = vello_cpu::Pixmap::new(width_u16, height_u16);
@@ -77,6 +133,8 @@ impl RenderBackend for CpuBackend {
         })
     }
 }
+
+impl RenderBackend for CpuBackend {}
 
 fn draw_op(
     backend: &mut CpuBackend,
