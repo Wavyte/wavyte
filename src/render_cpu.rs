@@ -6,12 +6,13 @@ use crate::{
     error::{WavyteError, WavyteResult},
     render::{FrameRGBA, RenderBackend, RenderSettings},
     render_passes::PassBackend,
+    svg_raster::{SvgRasterKey, rasterize_svg_to_premul_rgba8, svg_raster_params},
 };
 
 pub struct CpuBackend {
     settings: RenderSettings,
     image_cache: HashMap<AssetId, vello_cpu::Image>,
-    svg_cache: HashMap<AssetId, vello_cpu::Image>,
+    svg_cache: HashMap<SvgRasterKey, vello_cpu::Image>,
     font_cache: HashMap<AssetId, vello_cpu::peniko::FontData>,
     surfaces: HashMap<SurfaceId, CpuSurface>,
 }
@@ -370,10 +371,10 @@ fn draw_op(
             blend: _,
             z: _,
         } => {
-            let svg_paint = backend.svg_paint_for(*asset, assets)?;
-            let (w, h) = image_paint_size(&svg_paint)?;
+            let (svg_paint, w, h, transform_adjust) =
+                backend.svg_paint_for(*asset, *transform, assets)?;
 
-            ctx.set_transform(affine_to_cpu(*transform));
+            ctx.set_transform(affine_to_cpu(transform_adjust));
             ctx.set_paint(svg_paint);
 
             if *opacity < 1.0 {
@@ -511,18 +512,25 @@ impl CpuBackend {
     fn svg_paint_for(
         &mut self,
         id: AssetId,
+        transform: crate::core::Affine,
         assets: &mut dyn AssetCache,
-    ) -> WavyteResult<vello_cpu::Image> {
-        if let Some(paint) = self.svg_cache.get(&id) {
-            return Ok(paint.clone());
-        }
-
+    ) -> WavyteResult<(vello_cpu::Image, f64, f64, crate::core::Affine)> {
         let prepared = assets.get_or_load_by_id(id)?;
         let PreparedAsset::Svg(svg) = prepared else {
             return Err(WavyteError::evaluation("AssetId is not a PreparedSvg"));
         };
 
-        let (w, h, rgba8_premul) = rasterize_svg_to_premul_rgba8(&svg.tree)?;
+        let (w, h, transform_adjust) = svg_raster_params(&svg.tree, transform)?;
+        let key = SvgRasterKey {
+            asset: id,
+            width: w,
+            height: h,
+        };
+        if let Some(paint) = self.svg_cache.get(&key) {
+            return Ok((paint.clone(), w as f64, h as f64, transform_adjust));
+        }
+
+        let rgba8_premul = rasterize_svg_to_premul_rgba8(&svg.tree, w, h)?;
         let pixmap = image_premul_bytes_to_pixmap(rgba8_premul.as_slice(), w, h)?;
 
         let paint = vello_cpu::Image {
@@ -530,31 +538,7 @@ impl CpuBackend {
             sampler: vello_cpu::peniko::ImageSampler::default(),
         };
 
-        self.svg_cache.insert(id, paint.clone());
-        Ok(paint)
+        self.svg_cache.insert(key, paint.clone());
+        Ok((paint, w as f64, h as f64, transform_adjust))
     }
-}
-
-fn rasterize_svg_to_premul_rgba8(tree: &usvg::Tree) -> WavyteResult<(u32, u32, Vec<u8>)> {
-    fn to_px(v: f32) -> WavyteResult<u32> {
-        if !v.is_finite() || v <= 0.0 {
-            return Err(WavyteError::evaluation("svg has invalid width/height"));
-        }
-        let px = v.ceil() as u32;
-        Ok(px.max(1))
-    }
-
-    let size = tree.size();
-    let width = to_px(size.width())?;
-    let height = to_px(size.height())?;
-
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
-        .ok_or_else(|| WavyteError::evaluation("failed to allocate svg pixmap"))?;
-    resvg::render(
-        tree,
-        resvg::tiny_skia::Transform::identity(),
-        &mut pixmap.as_mut(),
-    );
-
-    Ok((width, height, pixmap.data().to_vec()))
 }
