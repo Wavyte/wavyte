@@ -1,3 +1,26 @@
+//! Wavyte is a programmatic video composition and rendering engine.
+//!
+//! Wavyte v0.1.0 is deliberately scoped: it focuses on a stable and testable pipeline that turns a
+//! timeline (`Composition`) into pixels (`FrameRGBA`) via a backend-agnostic render IR (`RenderPlan`).
+//!
+//! # Pipeline overview
+//!
+//! 1. **Evaluate**: `Composition + FrameIndex -> EvaluatedGraph` (what is visible, in what order)
+//! 2. **Compile**: `EvaluatedGraph -> RenderPlan` (backend-agnostic passes over explicit surfaces)
+//! 3. **Render**: `RenderPlan -> FrameRGBA` (CPU by default, optional GPU backend)
+//! 4. **Encode** (optional): stream frames to the system `ffmpeg` binary for MP4 output
+//!
+//! The key design constraints in v0.1.0:
+//!
+//! - **No unsafe**: `unsafe` is forbidden in this crate.
+//! - **Deterministic-by-default**: evaluation/compilation are pure and stable for a given input.
+//! - **No IO in renderers**: external IO lives behind [`AssetCache`].
+//! - **Premultiplied RGBA8** end-to-end: renderers output premultiplied pixels.
+//!
+//! # Getting started
+//!
+//! - For end-user usage, see the repository README.
+//! - For a detailed, standalone walkthrough of the API and architecture, see [`crate::guide`].
 #![forbid(unsafe_code)]
 
 mod anim;
@@ -24,6 +47,9 @@ mod composite_cpu;
 mod render_cpu;
 #[cfg(feature = "gpu")]
 mod render_vello;
+
+/// High-level, standalone documentation for Wavyte’s concepts and architecture.
+pub mod guide;
 
 pub use anim::{Anim, InterpMode, Keyframe, Keyframes, LoopMode, SampleCtx};
 pub use anim_ease::Ease;
