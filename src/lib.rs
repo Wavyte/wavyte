@@ -11,6 +11,7 @@ mod core;
 mod dsl;
 mod error;
 mod eval;
+mod fx;
 mod model;
 mod pipeline;
 mod render;
@@ -36,6 +37,7 @@ pub use core::{
 pub use dsl::{ClipBuilder, CompositionBuilder, TrackBuilder};
 pub use error::{WavyteError, WavyteResult};
 pub use eval::{EvaluatedClipNode, EvaluatedGraph, Evaluator, ResolvedEffect, ResolvedTransition};
+pub use fx::{Effect, FxPipeline, InlineFx, PassFx, normalize_effects, parse_effect};
 pub use model::{
     Asset, AudioAsset, BlendMode, Clip, ClipProps, Composition, EffectInstance, ImageAsset,
     PathAsset, SvgAsset, TextAsset, Track, TransitionSpec, VideoAsset,
