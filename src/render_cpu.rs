@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     assets::{AssetCache, AssetId, PreparedAsset},
-    compile::{DrawOp, SurfaceDesc, SurfaceId},
+    compile::{CompositeOp, DrawOp, SurfaceDesc, SurfaceId},
     error::{WavyteError, WavyteResult},
     render::{FrameRGBA, RenderBackend, RenderSettings},
     render_passes::PassBackend,
@@ -13,7 +13,13 @@ pub struct CpuBackend {
     image_cache: HashMap<AssetId, vello_cpu::Image>,
     svg_cache: HashMap<AssetId, vello_cpu::Image>,
     font_cache: HashMap<AssetId, vello_cpu::peniko::FontData>,
-    ctx: Option<vello_cpu::RenderContext>,
+    surfaces: HashMap<SurfaceId, CpuSurface>,
+}
+
+struct CpuSurface {
+    width: u16,
+    height: u16,
+    pixmap: vello_cpu::Pixmap,
 }
 
 impl CpuBackend {
@@ -23,38 +29,43 @@ impl CpuBackend {
             image_cache: HashMap::new(),
             svg_cache: HashMap::new(),
             font_cache: HashMap::new(),
-            ctx: None,
+            surfaces: HashMap::new(),
         }
     }
 }
 
 impl PassBackend for CpuBackend {
     fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()> {
-        if id != SurfaceId(0) {
-            return Ok(());
+        if id == SurfaceId(0) {
+            self.surfaces.clear();
         }
 
         let width_u16: u16 = desc
             .width
             .try_into()
-            .map_err(|_| WavyteError::evaluation("canvas width exceeds u16"))?;
+            .map_err(|_| WavyteError::evaluation("surface width exceeds u16"))?;
         let height_u16: u16 = desc
             .height
             .try_into()
-            .map_err(|_| WavyteError::evaluation("canvas height exceeds u16"))?;
+            .map_err(|_| WavyteError::evaluation("surface height exceeds u16"))?;
 
-        let mut ctx = vello_cpu::RenderContext::new(width_u16, height_u16);
-        if let Some([r, g, b, a]) = self.settings.clear_rgba {
-            ctx.set_paint(vello_cpu::peniko::Color::from_rgba8(r, g, b, a));
-            ctx.fill_rect(&vello_cpu::kurbo::Rect::new(
-                0.0,
-                0.0,
-                f64::from(width_u16),
-                f64::from(height_u16),
-            ));
+        let surface = CpuSurface {
+            width: width_u16,
+            height: height_u16,
+            pixmap: vello_cpu::Pixmap::new(width_u16, height_u16),
+        };
+        self.surfaces.insert(id, surface);
+
+        if id == SurfaceId(0)
+            && let Some([r, g, b, a]) = self.settings.clear_rgba
+        {
+            let premul = premul_rgba8(r, g, b, a);
+            let s = self
+                .surfaces
+                .get_mut(&SurfaceId(0))
+                .ok_or_else(|| WavyteError::evaluation("surface 0 missing"))?;
+            clear_pixmap(&mut s.pixmap, premul);
         }
-
-        self.ctx = Some(ctx);
         Ok(())
     }
 
@@ -63,17 +74,24 @@ impl PassBackend for CpuBackend {
         pass: &crate::compile::ScenePass,
         assets: &mut dyn AssetCache,
     ) -> WavyteResult<()> {
-        let mut ctx = self
-            .ctx
-            .take()
-            .ok_or_else(|| WavyteError::evaluation("cpu backend surface 0 was not initialized"))?;
+        let mut surface = self.surfaces.remove(&pass.target).ok_or_else(|| {
+            WavyteError::evaluation(format!(
+                "scene target surface {:?} was not initialized",
+                pass.target
+            ))
+        })?;
 
-        let _ = pass.target;
-        let _ = pass.clear_to_transparent;
+        if pass.clear_to_transparent {
+            clear_pixmap(&mut surface.pixmap, [0, 0, 0, 0]);
+        }
+
+        let mut ctx = vello_cpu::RenderContext::new(surface.width, surface.height);
         for op in &pass.ops {
             draw_op(self, &mut ctx, op, assets)?;
         }
-        self.ctx = Some(ctx);
+        ctx.flush();
+        ctx.render_to_pixmap(&mut surface.pixmap);
+        self.surfaces.insert(pass.target, surface);
         Ok(())
     }
 
@@ -87,9 +105,35 @@ impl PassBackend for CpuBackend {
 
     fn exec_composite(
         &mut self,
-        _pass: &crate::compile::CompositePass,
+        pass: &crate::compile::CompositePass,
         _assets: &mut dyn AssetCache,
     ) -> WavyteResult<()> {
+        let mut dst = self.surfaces.remove(&pass.target).ok_or_else(|| {
+            WavyteError::evaluation(format!(
+                "composite target surface {:?} was not initialized",
+                pass.target
+            ))
+        })?;
+
+        for op in &pass.ops {
+            match *op {
+                CompositeOp::Over { src, opacity } => {
+                    let src = self.surfaces.get(&src).ok_or_else(|| {
+                        WavyteError::evaluation(format!(
+                            "composite src surface {:?} was not initialized",
+                            src
+                        ))
+                    })?;
+                    composite_over_in_place(&mut dst.pixmap, &src.pixmap, opacity)?;
+                }
+                CompositeOp::Crossfade { .. } | CompositeOp::Wipe { .. } => {
+                    return Err(WavyteError::evaluation(
+                        "cpu composite crossfade/wipe is not implemented yet (phase 5)",
+                    ));
+                }
+            }
+        }
+        self.surfaces.insert(pass.target, dst);
         Ok(())
     }
 
@@ -99,42 +143,77 @@ impl PassBackend for CpuBackend {
         plan: &crate::compile::RenderPlan,
         _assets: &mut dyn AssetCache,
     ) -> WavyteResult<FrameRGBA> {
-        if surface != SurfaceId(0) {
-            return Err(WavyteError::evaluation(
-                "cpu backend readback is only supported for surface 0 in this phase",
-            ));
-        }
-
-        let mut ctx = self
-            .ctx
-            .take()
-            .ok_or_else(|| WavyteError::evaluation("cpu backend surface 0 was not initialized"))?;
-
-        let width_u16: u16 = plan
-            .canvas
-            .width
-            .try_into()
-            .map_err(|_| WavyteError::evaluation("canvas width exceeds u16"))?;
-        let height_u16: u16 = plan
-            .canvas
-            .height
-            .try_into()
-            .map_err(|_| WavyteError::evaluation("canvas height exceeds u16"))?;
-
-        ctx.flush();
-        let mut pixmap = vello_cpu::Pixmap::new(width_u16, height_u16);
-        ctx.render_to_pixmap(&mut pixmap);
+        let s = self.surfaces.remove(&surface).ok_or_else(|| {
+            WavyteError::evaluation(format!(
+                "readback surface {:?} was not initialized",
+                surface
+            ))
+        })?;
 
         Ok(FrameRGBA {
             width: plan.canvas.width,
             height: plan.canvas.height,
-            data: pixmap.data_as_u8_slice().to_vec(),
+            data: s.pixmap.data_as_u8_slice().to_vec(),
             premultiplied: true,
         })
     }
 }
 
 impl RenderBackend for CpuBackend {}
+
+fn premul_rgba8(r: u8, g: u8, b: u8, a: u8) -> [u8; 4] {
+    let af = (a as u16) + 1;
+    let premul = |c: u8| -> u8 { (((c as u16) * af) >> 8) as u8 };
+    [premul(r), premul(g), premul(b), a]
+}
+
+fn clear_pixmap(pixmap: &mut vello_cpu::Pixmap, rgba: [u8; 4]) {
+    let data = pixmap.data_as_u8_slice_mut();
+    for px in data.chunks_exact_mut(4) {
+        px.copy_from_slice(&rgba);
+    }
+}
+
+fn composite_over_in_place(
+    dst: &mut vello_cpu::Pixmap,
+    src: &vello_cpu::Pixmap,
+    opacity: f32,
+) -> WavyteResult<()> {
+    let opacity = opacity.clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+        return Ok(());
+    }
+
+    let dst_bytes = dst.data_as_u8_slice_mut();
+    let src_bytes = src.data_as_u8_slice();
+    if dst_bytes.len() != src_bytes.len() {
+        return Err(WavyteError::evaluation(
+            "composite surface byte length mismatch",
+        ));
+    }
+
+    for (d, s) in dst_bytes.chunks_exact_mut(4).zip(src_bytes.chunks_exact(4)) {
+        let sa = (s[3] as f32) / 255.0;
+        let sa = (sa * opacity).clamp(0.0, 1.0);
+        if sa <= 0.0 {
+            continue;
+        }
+
+        let da = (d[3] as f32) / 255.0;
+        let out_a = sa + da * (1.0 - sa);
+        let inv = 1.0 - sa;
+
+        for i in 0..3 {
+            let sc = (s[i] as f32) * opacity;
+            let dc = d[i] as f32;
+            let out = sc + dc * inv;
+            d[i] = out.round().clamp(0.0, 255.0) as u8;
+        }
+        d[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+
+    Ok(())
+}
 
 fn draw_op(
     backend: &mut CpuBackend,
