@@ -15,6 +15,7 @@ mod fx;
 mod model;
 mod pipeline;
 mod render;
+mod transitions;
 
 #[cfg(feature = "cpu")]
 mod render_cpu;
@@ -44,3 +45,4 @@ pub use model::{
 };
 pub use pipeline::render_frame;
 pub use render::{BackendKind, FrameRGBA, RenderBackend, RenderSettings, create_backend};
+pub use transitions::{TransitionKind, WipeDir, parse_transition};

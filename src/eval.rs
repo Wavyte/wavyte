@@ -34,6 +34,7 @@ pub struct ResolvedEffect {
 pub struct ResolvedTransition {
     pub kind: String,
     pub progress: f64, // 0..1
+    pub params: serde_json::Value,
 }
 
 pub struct Evaluator;
@@ -187,6 +188,7 @@ fn resolve_transition_window(
     Some(ResolvedTransition {
         kind: spec.kind.clone(),
         progress,
+        params: spec.params.clone(),
     })
 }
 
@@ -307,6 +309,7 @@ mod tests {
             kind: "crossfade".to_string(),
             duration_frames: 3,
             ease: Ease::Linear,
+            params: serde_json::Value::Null,
         };
         let comp = basic_comp(Anim::constant(1.0), Some(tr.clone()), Some(tr));
 

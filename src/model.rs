@@ -110,6 +110,8 @@ pub struct TransitionSpec {
     pub kind: String,
     pub duration_frames: u64,
     pub ease: Ease,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub params: serde_json::Value,
 }
 
 impl Composition {
@@ -230,6 +232,11 @@ impl TransitionSpec {
                 "transition duration_frames must be > 0",
             ));
         }
+        if !(self.params.is_null() || self.params.is_object()) {
+            return Err(WavyteError::validation(
+                "transition params must be an object when set",
+            ));
+        }
         Ok(())
     }
 }
@@ -283,6 +290,7 @@ mod tests {
                         kind: "crossfade".to_string(),
                         duration_frames: 10,
                         ease: Ease::Linear,
+                        params: serde_json::Value::Null,
                     }),
                     transition_out: None,
                 }],

@@ -217,6 +217,7 @@ mod tests {
                         kind: "fade".to_string(),
                         duration_frames: 2,
                         ease: crate::Ease::Linear,
+                        params: serde_json::Value::Null,
                     }),
                     transition_out: None,
                 }],

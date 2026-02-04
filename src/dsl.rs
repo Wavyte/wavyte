@@ -213,6 +213,7 @@ mod tests {
             kind: "crossfade".to_string(),
             duration_frames: 10,
             ease: Ease::Linear,
+            params: serde_json::Value::Null,
         })
         .build()
         .unwrap();
