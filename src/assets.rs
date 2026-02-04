@@ -205,17 +205,63 @@ impl FsAssetCache {
         let abs = self.root.join(Path::new(norm_path));
         let resources_dir = abs.parent().map(|p| p.to_path_buf());
 
+        let fontdb = self.build_svg_fontdb(resources_dir.as_deref());
         let opts = usvg::Options {
             resources_dir,
+            fontdb,
             ..Default::default()
         };
 
         // Font correctness uplift will supply an explicit fontdb (system + project fonts).
-        // For now, let `usvg` build its default database (feature-wired in Cargo.toml).
         let tree = usvg::Tree::from_data(bytes, &opts).with_context(|| "parse svg tree")?;
         Ok(PreparedSvg {
             tree: Arc::new(tree),
         })
+    }
+
+    fn build_svg_fontdb(
+        &self,
+        resources_dir: Option<&Path>,
+    ) -> std::sync::Arc<usvg::fontdb::Database> {
+        let mut db = usvg::fontdb::Database::new();
+
+        // System fonts ON (policy): best-effort; failures should not break rendering if project fonts exist.
+        db.load_system_fonts();
+
+        // Project fonts ON (policy): load fonts from `<root>/fonts` and `<root>/assets` (bounded, non-recursive).
+        self.load_fonts_from_dir(&mut db, &self.root.join("fonts"));
+        self.load_fonts_from_dir(&mut db, &self.root.join("assets"));
+
+        // Also scan the SVG's own directory and a `fonts/` subdir next to it (for compositions that bundle fonts
+        // alongside SVGs).
+        if let Some(dir) = resources_dir {
+            self.load_fonts_from_dir(&mut db, dir);
+            self.load_fonts_from_dir(&mut db, &dir.join("fonts"));
+        }
+
+        std::sync::Arc::new(db)
+    }
+
+    fn load_fonts_from_dir(&self, db: &mut usvg::fontdb::Database, dir: &Path) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let ext = ext.to_ascii_lowercase();
+            if ext != "ttf" && ext != "otf" && ext != "ttc" {
+                continue;
+            }
+
+            // Ignore individual font load failures; partial success is better than hard error.
+            let _ = db.load_font_file(&path);
+        }
     }
 }
 
