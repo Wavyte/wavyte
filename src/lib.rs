@@ -17,6 +17,7 @@ pub use anim_ease::Ease;
 pub use anim_ops::{delay, loop_, mix, reverse, sequence, speed, stagger};
 pub use assets::{
     AssetCache, AssetId, AssetKey, FsAssetCache, PreparedAsset, PreparedImage, PreparedSvg,
+    PreparedText, TextBrushRgba8, TextLayoutEngine,
 };
 pub use assets_decode::{decode_image, parse_svg};
 pub use core::{Canvas, Fps, FrameIndex, FrameRange, Rgba8Premul, Transform2D, Vec2};

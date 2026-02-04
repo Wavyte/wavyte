@@ -25,10 +25,32 @@ pub struct PreparedSvg {
     pub tree: Arc<usvg::Tree>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextBrushRgba8 {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+#[derive(Clone)]
+pub struct PreparedText {
+    pub layout: Arc<parley::Layout<TextBrushRgba8>>,
+}
+
+impl std::fmt::Debug for PreparedText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedText")
+            .field("layout_ptr", &Arc::as_ptr(&self.layout))
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum PreparedAsset {
     Image(PreparedImage),
     Svg(PreparedSvg),
+    Text(PreparedText),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -57,6 +79,7 @@ pub struct FsAssetCache {
     keys_by_id: HashMap<AssetId, AssetKey>,
     prepared: HashMap<AssetId, PreparedAsset>,
     decode_counts: HashMap<AssetId, u32>,
+    text_engine: TextLayoutEngine,
 }
 
 impl FsAssetCache {
@@ -66,6 +89,7 @@ impl FsAssetCache {
             keys_by_id: HashMap::new(),
             prepared: HashMap::new(),
             decode_counts: HashMap::new(),
+            text_engine: TextLayoutEngine::new(),
         }
     }
 
@@ -83,12 +107,33 @@ impl FsAssetCache {
                 b'S',
                 AssetKey::new(self.normalize_source(&a.source)?, vec![]),
             )),
-            model::Asset::Video(_)
-            | model::Asset::Audio(_)
-            | model::Asset::Path(_)
-            | model::Asset::Text(_) => Err(WavyteError::validation(
-                "asset kind not yet supported by FsAssetCache in phase 3",
-            )),
+            model::Asset::Text(a) => {
+                let norm_path = self.normalize_source(&a.font_source)?;
+                let mut params = vec![
+                    ("text".to_string(), a.text.clone()),
+                    (
+                        "size_px_bits".to_string(),
+                        format!("0x{:08x}", a.size_px.to_bits()),
+                    ),
+                    (
+                        "color_rgba8".to_string(),
+                        format!(
+                            "#{:02x}{:02x}{:02x}{:02x}",
+                            a.color_rgba8[0], a.color_rgba8[1], a.color_rgba8[2], a.color_rgba8[3]
+                        ),
+                    ),
+                ];
+                if let Some(w) = a.max_width_px {
+                    params.push((
+                        "max_width_px_bits".to_string(),
+                        format!("0x{:08x}", w.to_bits()),
+                    ));
+                }
+                Ok((b'T', AssetKey::new(norm_path, params)))
+            }
+            model::Asset::Video(_) | model::Asset::Audio(_) | model::Asset::Path(_) => Err(
+                WavyteError::validation("asset kind not yet supported by FsAssetCache in phase 3"),
+            ),
         }
     }
 
@@ -144,10 +189,26 @@ impl AssetCache for FsAssetCache {
                 let bytes = self.read_bytes(&key.norm_path)?;
                 PreparedAsset::Svg(assets_decode::parse_svg(&bytes)?)
             }
-            model::Asset::Video(_)
-            | model::Asset::Audio(_)
-            | model::Asset::Path(_)
-            | model::Asset::Text(_) => {
+            model::Asset::Text(a) => {
+                let font_bytes = self.read_bytes(&key.norm_path)?;
+                let brush = TextBrushRgba8 {
+                    r: a.color_rgba8[0],
+                    g: a.color_rgba8[1],
+                    b: a.color_rgba8[2],
+                    a: a.color_rgba8[3],
+                };
+                let layout = self.text_engine.layout_plain(
+                    &a.text,
+                    font_bytes,
+                    a.size_px,
+                    brush,
+                    a.max_width_px,
+                )?;
+                PreparedAsset::Text(PreparedText {
+                    layout: Arc::new(layout),
+                })
+            }
+            model::Asset::Video(_) | model::Asset::Audio(_) | model::Asset::Path(_) => {
                 return Err(WavyteError::validation(
                     "asset kind not yet supported by FsAssetCache in phase 3",
                 ));
@@ -214,6 +275,79 @@ impl Fnv1a64 {
     }
 }
 
+pub struct TextLayoutEngine {
+    font_ctx: parley::FontContext,
+    layout_ctx: parley::LayoutContext<TextBrushRgba8>,
+}
+
+impl Default for TextLayoutEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TextLayoutEngine {
+    pub fn new() -> Self {
+        Self {
+            font_ctx: parley::FontContext::default(),
+            layout_ctx: parley::LayoutContext::new(),
+        }
+    }
+
+    pub fn layout_plain(
+        &mut self,
+        text: &str,
+        font_bytes: Vec<u8>,
+        size_px: f32,
+        brush: TextBrushRgba8,
+        max_width_px: Option<f32>,
+    ) -> WavyteResult<parley::Layout<TextBrushRgba8>> {
+        if !size_px.is_finite() || size_px <= 0.0 {
+            return Err(WavyteError::validation(
+                "text size_px must be finite and > 0",
+            ));
+        }
+
+        let families = self
+            .font_ctx
+            .collection
+            .register_fonts(parley::fontique::Blob::from(font_bytes), None);
+        let family_id = families.first().map(|(id, _)| *id).ok_or_else(|| {
+            WavyteError::validation("no font families registered from font bytes")
+        })?;
+
+        let family_name = self
+            .font_ctx
+            .collection
+            .family_name(family_id)
+            .ok_or_else(|| WavyteError::validation("registered font family has no name"))?
+            .to_string();
+
+        let mut builder = self
+            .layout_ctx
+            .ranged_builder(&mut self.font_ctx, text, 1.0, true);
+        builder.push_default(parley::style::StyleProperty::FontStack(
+            parley::style::FontStack::Source(std::borrow::Cow::Owned(family_name)),
+        ));
+        builder.push_default(parley::style::StyleProperty::FontSize(size_px));
+        builder.push_default(parley::style::StyleProperty::Brush(brush));
+
+        let mut layout: parley::Layout<TextBrushRgba8> = builder.build(text);
+        if let Some(w) = max_width_px {
+            layout.break_all_lines(Some(w));
+            layout.align(
+                Some(w),
+                parley::Alignment::Start,
+                parley::AlignmentOptions::default(),
+            );
+        } else {
+            layout.break_all_lines(None);
+        }
+
+        Ok(layout)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -274,5 +408,37 @@ mod tests {
         assert_eq!(cache.decode_count(id), 1);
 
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn parley_brush_type_is_valid() {
+        fn assert_brush<B: parley::style::Brush>() {}
+        assert_brush::<TextBrushRgba8>();
+    }
+
+    #[test]
+    fn text_layout_smoke_with_local_font_if_present() {
+        let font_path = std::path::Path::new("assets/PlayfairDisplay.ttf");
+        let Ok(font_bytes) = std::fs::read(font_path) else {
+            return;
+        };
+
+        let mut engine = TextLayoutEngine::new();
+        let layout = engine
+            .layout_plain(
+                "hello",
+                font_bytes,
+                48.0,
+                TextBrushRgba8 {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                },
+                None,
+            )
+            .unwrap();
+
+        assert!(layout.lines().next().is_some());
     }
 }
