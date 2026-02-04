@@ -3,8 +3,8 @@ use crate::{
     core::{Affine, BezPath, Canvas, Rgba8Premul},
     error::{WavyteError, WavyteResult},
     eval::EvaluatedGraph,
-    fx::PassFx,
-    model::{Asset, BlendMode, Composition},
+    fx::{PassFx, normalize_effects, parse_effect},
+    model::{Asset, BlendMode, Composition, EffectInstance},
     transitions::WipeDir,
 };
 
@@ -134,7 +134,17 @@ pub fn compile_frame(
             )));
         };
 
-        let mut opacity = node.opacity as f32;
+        let mut parsed = Vec::with_capacity(node.effects.len());
+        for e in &node.effects {
+            let inst = EffectInstance {
+                kind: e.kind.clone(),
+                params: e.params.clone(),
+            };
+            parsed.push(parse_effect(&inst)?);
+        }
+        let fx = normalize_effects(&parsed);
+
+        let mut opacity = (node.opacity as f32) * fx.inline.opacity_mul;
         if let Some(tr) = &node.transition_in {
             opacity *= tr.progress as f32;
         }
@@ -147,12 +157,14 @@ pub fn compile_frame(
             continue;
         }
 
+        let transform = node.transform * fx.inline.transform_post;
+
         let op = match asset {
             Asset::Path(a) => {
                 let path = parse_svg_path(&a.svg_path_d)?;
                 DrawOp::FillPath {
                     path,
-                    transform: node.transform,
+                    transform,
                     color: Rgba8Premul::from_straight_rgba(255, 255, 255, 255),
                     opacity,
                     blend: node.blend,
@@ -163,7 +175,7 @@ pub fn compile_frame(
                 let id = assets.id_for(asset)?;
                 DrawOp::Image {
                     asset: id,
-                    transform: node.transform,
+                    transform,
                     opacity,
                     blend: node.blend,
                     z: node.z,
@@ -173,7 +185,7 @@ pub fn compile_frame(
                 let id = assets.id_for(asset)?;
                 DrawOp::Svg {
                     asset: id,
-                    transform: node.transform,
+                    transform,
                     opacity,
                     blend: node.blend,
                     z: node.z,
@@ -183,7 +195,7 @@ pub fn compile_frame(
                 let id = assets.id_for(asset)?;
                 DrawOp::Text {
                     asset: id,
-                    transform: node.transform,
+                    transform,
                     opacity,
                     blend: node.blend,
                     z: node.z,
@@ -251,7 +263,9 @@ mod tests {
         anim::Anim,
         core::{Fps, FrameIndex, FrameRange, Transform2D},
         eval::Evaluator,
-        model::{Asset, BlendMode, Clip, ClipProps, PathAsset, Track, TransitionSpec},
+        model::{
+            Asset, BlendMode, Clip, ClipProps, EffectInstance, PathAsset, Track, TransitionSpec,
+        },
     };
 
     struct NoAssets;
@@ -328,5 +342,71 @@ mod tests {
             }
             _ => panic!("expected FillPath"),
         }
+    }
+
+    #[test]
+    fn compile_applies_inline_effects_to_opacity_and_transform() {
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "p0".to_string(),
+            Asset::Path(PathAsset {
+                svg_path_d: "M0,0 L10,0 L10,10 L0,10 Z".to_string(),
+            }),
+        );
+
+        let comp = Composition {
+            fps: Fps::new(30, 1).unwrap(),
+            canvas: Canvas {
+                width: 64,
+                height: 64,
+            },
+            duration: FrameIndex(10),
+            assets,
+            tracks: vec![Track {
+                name: "t".to_string(),
+                z_base: 0,
+                clips: vec![Clip {
+                    id: "c0".to_string(),
+                    asset: "p0".to_string(),
+                    range: FrameRange::new(FrameIndex(0), FrameIndex(10)).unwrap(),
+                    props: ClipProps {
+                        transform: Anim::constant(Transform2D::default()),
+                        opacity: Anim::constant(1.0),
+                        blend: BlendMode::Normal,
+                    },
+                    z_offset: 0,
+                    effects: vec![
+                        EffectInstance {
+                            kind: "opacity_mul".to_string(),
+                            params: serde_json::json!({ "value": 0.5 }),
+                        },
+                        EffectInstance {
+                            kind: "transform_post".to_string(),
+                            params: serde_json::json!({ "translate": [3.0, 4.0] }),
+                        },
+                    ],
+                    transition_in: None,
+                    transition_out: None,
+                }],
+            }],
+            seed: 1,
+        };
+
+        let eval = Evaluator::eval_frame(&comp, FrameIndex(0)).unwrap();
+        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let Pass::Scene(scene) = &plan.passes[0] else {
+            panic!("expected Scene pass");
+        };
+        let DrawOp::FillPath {
+            transform, opacity, ..
+        } = &scene.ops[0]
+        else {
+            panic!("expected FillPath");
+        };
+        assert_eq!(*opacity, 0.5);
+
+        let coeffs = transform.as_coeffs();
+        assert_eq!(coeffs[4], 3.0);
+        assert_eq!(coeffs[5], 4.0);
     }
 }
