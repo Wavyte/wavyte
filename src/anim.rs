@@ -1,6 +1,6 @@
 use crate::{
     anim_ease::Ease,
-    anim_proc::Procedural,
+    anim_proc::{ProcValue, Procedural},
     core::{FrameIndex, Transform2D, Vec2},
     error::{WavyteError, WavyteResult},
 };
@@ -72,7 +72,7 @@ pub enum Anim<T> {
 
 impl<T> Anim<T>
 where
-    T: Lerp + Clone,
+    T: Lerp + Clone + ProcValue,
 {
     pub fn constant(value: T) -> Self {
         Self::Keyframes(Keyframes {
@@ -209,7 +209,7 @@ pub enum LoopMode {
 
 impl<T> Expr<T>
 where
-    T: Lerp + Clone,
+    T: Lerp + Clone + ProcValue,
 {
     pub fn validate(&self) -> WavyteResult<()> {
         match self {
