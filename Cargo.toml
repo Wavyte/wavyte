@@ -2,10 +2,24 @@
 name = "wavyte"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.93"
+license = "AGPL-3.0-only"
+description = "Programmatic video composition and rendering in Rust (CPU by default, optional GPU, ffmpeg MP4 encoding)"
+repository = "https://github.com/Wavyte/wavyte"
+homepage = "https://github.com/Wavyte/wavyte"
+documentation = "https://docs.rs/wavyte"
+readme = "README.md"
+keywords = ["video", "rendering", "compositing", "ffmpeg", "motion-graphics"]
+include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
 
 [features]
 default = []
 gpu = ["dep:vello", "dep:vello_svg", "dep:pollster", "dep:wgpu"]
+
+[package.metadata.docs.rs]
+features = ["gpu"]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 anyhow = "1"
