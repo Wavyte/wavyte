@@ -9,11 +9,12 @@ gpu = ["dep:vello", "dep:vello_svg", "dep:pollster", "dep:wgpu"]
 cpu = ["dep:vello_cpu", "dep:resvg"]
 hybrid = []
 ffmpeg = []
-cli = []
+cli = ["dep:clap"]
 napi = []
 
 [dependencies]
 anyhow = "1"
+clap = { version = "4.5.57", optional = true, features = ["derive"] }
 image = "0.25.9"
 kurbo = { version = "0.13", features = ["serde"] }
 parley = { version = "0.7.0", default-features = false, features = ["std"] }
@@ -31,3 +32,8 @@ wgpu = { version = "27.0.1", optional = true, default-features = false, features
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[[bin]]
+name = "wavyte"
+path = "src/bin/wavyte.rs"
+required-features = ["cli"]
