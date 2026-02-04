@@ -2,11 +2,25 @@ use std::collections::HashMap;
 
 use crate::{
     assets::{AssetCache, AssetId, PreparedAsset},
-    compile::{DrawOp, SurfaceDesc, SurfaceId},
+    compile::{CompositeOp, DrawOp, SurfaceDesc, SurfaceId},
     error::{WavyteError, WavyteResult},
     render::{FrameRGBA, RenderBackend, RenderSettings},
     render_passes::PassBackend,
 };
+
+struct GpuSurface {
+    width: u32,
+    height: u32,
+    texture: vello::wgpu::Texture,
+    view: vello::wgpu::TextureView,
+}
+
+struct Compositor {
+    pipeline: vello::wgpu::RenderPipeline,
+    bind_group_layout: vello::wgpu::BindGroupLayout,
+    sampler: vello::wgpu::Sampler,
+    params: vello::wgpu::Buffer,
+}
 
 pub struct VelloBackend {
     settings: RenderSettings,
@@ -16,12 +30,13 @@ pub struct VelloBackend {
     renderer: Option<vello::Renderer>,
     scene: vello::Scene,
 
-    target_texture: Option<vello::wgpu::Texture>,
-    target_view: Option<vello::wgpu::TextureView>,
     readback: Option<vello::wgpu::Buffer>,
     readback_bytes_per_row: u32,
     width: u32,
     height: u32,
+
+    surfaces: HashMap<SurfaceId, GpuSurface>,
+    compositor: Option<Compositor>,
 
     image_cache: HashMap<AssetId, vello::peniko::ImageData>,
     font_cache: HashMap<AssetId, vello::peniko::FontData>,
@@ -35,12 +50,12 @@ impl VelloBackend {
             queue: None,
             renderer: None,
             scene: vello::Scene::new(),
-            target_texture: None,
-            target_view: None,
             readback: None,
             readback_bytes_per_row: 0,
             width: 0,
             height: 0,
+            surfaces: HashMap::new(),
+            compositor: None,
             image_cache: HashMap::new(),
             font_cache: HashMap::new(),
         })
@@ -80,23 +95,6 @@ impl VelloBackend {
         let renderer = vello::Renderer::new(&device, vello::RendererOptions::default())
             .map_err(|e| WavyteError::evaluation(format!("vello renderer init failed: {e:?}")))?;
 
-        let texture = device.create_texture(&vello::wgpu::TextureDescriptor {
-            label: Some("wavyte_render_target"),
-            size: vello::wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: vello::wgpu::TextureDimension::D2,
-            format: vello::wgpu::TextureFormat::Rgba8Unorm,
-            usage: vello::wgpu::TextureUsages::STORAGE_BINDING
-                | vello::wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&vello::wgpu::TextureViewDescriptor::default());
-
         let bytes_per_row_unpadded = width
             .checked_mul(4)
             .ok_or_else(|| WavyteError::evaluation("render target width overflow"))?;
@@ -118,25 +116,203 @@ impl VelloBackend {
         self.device = Some(device);
         self.queue = Some(queue);
         self.renderer = Some(renderer);
-        self.target_texture = Some(texture);
-        self.target_view = Some(view);
         self.readback = Some(readback);
         self.readback_bytes_per_row = bytes_per_row;
         self.width = width;
         self.height = height;
+        self.surfaces.clear();
+        self.compositor = None;
         self.image_cache.clear();
         self.font_cache.clear();
+        Ok(())
+    }
+
+    fn ensure_compositor(&mut self) -> WavyteResult<()> {
+        if self.compositor.is_some() {
+            return Ok(());
+        }
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+
+        let sampler = device.create_sampler(&vello::wgpu::SamplerDescriptor {
+            label: Some("wavyte_composite_sampler"),
+            address_mode_u: vello::wgpu::AddressMode::ClampToEdge,
+            address_mode_v: vello::wgpu::AddressMode::ClampToEdge,
+            address_mode_w: vello::wgpu::AddressMode::ClampToEdge,
+            mag_filter: vello::wgpu::FilterMode::Nearest,
+            min_filter: vello::wgpu::FilterMode::Nearest,
+            mipmap_filter: vello::wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let params = device.create_buffer(&vello::wgpu::BufferDescriptor {
+            label: Some("wavyte_composite_params"),
+            size: 16,
+            usage: vello::wgpu::BufferUsages::UNIFORM | vello::wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_layout =
+            device.create_bind_group_layout(&vello::wgpu::BindGroupLayoutDescriptor {
+                label: Some("wavyte_composite_bgl"),
+                entries: &[
+                    vello::wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: vello::wgpu::ShaderStages::FRAGMENT,
+                        ty: vello::wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: vello::wgpu::TextureViewDimension::D2,
+                            sample_type: vello::wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    vello::wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: vello::wgpu::ShaderStages::FRAGMENT,
+                        ty: vello::wgpu::BindingType::Sampler(
+                            vello::wgpu::SamplerBindingType::Filtering,
+                        ),
+                        count: None,
+                    },
+                    vello::wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: vello::wgpu::ShaderStages::FRAGMENT,
+                        ty: vello::wgpu::BindingType::Buffer {
+                            ty: vello::wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: Some(std::num::NonZeroU64::new(16).unwrap()),
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let shader = device.create_shader_module(vello::wgpu::ShaderModuleDescriptor {
+            label: Some("wavyte_composite_shader"),
+            source: vello::wgpu::ShaderSource::Wgsl(
+                r#"
+struct VsOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
+  var p = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>( 3.0, -1.0),
+    vec2<f32>(-1.0,  3.0),
+  );
+  let pos = p[vi];
+  var o: VsOut;
+  o.pos = vec4<f32>(pos, 0.0, 1.0);
+  o.uv = (pos + vec2<f32>(1.0, 1.0)) * 0.5;
+  return o;
+}
+
+@group(0) @binding(0) var t_src: texture_2d<f32>;
+@group(0) @binding(1) var s_src: sampler;
+@group(0) @binding(2) var<uniform> params: vec4<f32>;
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+  let c = textureSample(t_src, s_src, in.uv);
+  return c * params.x;
+}
+"#
+                .into(),
+            ),
+        });
+
+        let pipeline_layout =
+            device.create_pipeline_layout(&vello::wgpu::PipelineLayoutDescriptor {
+                label: Some("wavyte_composite_pl"),
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let pipeline = device.create_render_pipeline(&vello::wgpu::RenderPipelineDescriptor {
+            label: Some("wavyte_composite_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: vello::wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                compilation_options: vello::wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            fragment: Some(vello::wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                compilation_options: vello::wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(vello::wgpu::ColorTargetState {
+                    format: vello::wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(vello::wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: vello::wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: vello::wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: vello::wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        self.compositor = Some(Compositor {
+            pipeline,
+            bind_group_layout,
+            sampler,
+            params,
+        });
+
         Ok(())
     }
 }
 
 impl PassBackend for VelloBackend {
     fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()> {
-        if id != SurfaceId(0) {
-            return Ok(());
-        }
         self.ensure_init(desc.width, desc.height)?;
-        self.scene.reset();
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+
+        let entry = self.surfaces.get(&id);
+        let needs_create = entry
+            .map(|s| s.width != desc.width || s.height != desc.height)
+            .unwrap_or(true);
+
+        if needs_create {
+            let texture = device.create_texture(&vello::wgpu::TextureDescriptor {
+                label: Some("wavyte_surface"),
+                size: vello::wgpu::Extent3d {
+                    width: desc.width,
+                    height: desc.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: vello::wgpu::TextureDimension::D2,
+                format: vello::wgpu::TextureFormat::Rgba8Unorm,
+                usage: vello::wgpu::TextureUsages::STORAGE_BINDING
+                    | vello::wgpu::TextureUsages::TEXTURE_BINDING
+                    | vello::wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | vello::wgpu::TextureUsages::COPY_SRC
+                    | vello::wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&vello::wgpu::TextureViewDescriptor::default());
+            self.surfaces.insert(
+                id,
+                GpuSurface {
+                    width: desc.width,
+                    height: desc.height,
+                    texture,
+                    view,
+                },
+            );
+        }
         Ok(())
     }
 
@@ -145,11 +321,53 @@ impl PassBackend for VelloBackend {
         pass: &crate::compile::ScenePass,
         assets: &mut dyn AssetCache,
     ) -> WavyteResult<()> {
-        let _ = pass.target;
-        let _ = pass.clear_to_transparent;
+        self.scene.reset();
         for op in &pass.ops {
             encode_op(self, op, self.width, self.height, assets)?;
         }
+
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        let queue = self
+            .queue
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        let target_view = self.surfaces.get(&pass.target).ok_or_else(|| {
+            WavyteError::evaluation(format!(
+                "scene target surface {:?} was not initialized",
+                pass.target
+            ))
+        })?;
+
+        let base_color = if pass.clear_to_transparent {
+            vello::peniko::Color::from_rgba8(0, 0, 0, 0)
+        } else {
+            match self.settings.clear_rgba {
+                Some([r, g, b, a]) => vello::peniko::Color::from_rgba8(r, g, b, a),
+                None => vello::peniko::Color::from_rgba8(0, 0, 0, 0),
+            }
+        };
+
+        let renderer = self
+            .renderer
+            .as_mut()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        renderer
+            .render_to_texture(
+                device,
+                queue,
+                &self.scene,
+                &target_view.view,
+                &vello::RenderParams {
+                    base_color,
+                    width: target_view.width,
+                    height: target_view.height,
+                    antialiasing_method: vello::AaConfig::Area,
+                },
+            )
+            .map_err(|e| WavyteError::evaluation(format!("vello render failed: {e:?}")))?;
         Ok(())
     }
 
@@ -163,23 +381,10 @@ impl PassBackend for VelloBackend {
 
     fn exec_composite(
         &mut self,
-        _pass: &crate::compile::CompositePass,
+        pass: &crate::compile::CompositePass,
         _assets: &mut dyn AssetCache,
     ) -> WavyteResult<()> {
-        Ok(())
-    }
-
-    fn readback_rgba8(
-        &mut self,
-        surface: SurfaceId,
-        plan: &crate::compile::RenderPlan,
-        _assets: &mut dyn AssetCache,
-    ) -> WavyteResult<FrameRGBA> {
-        if surface != SurfaceId(0) {
-            return Err(WavyteError::evaluation(
-                "gpu backend readback is only supported for surface 0 in this phase",
-            ));
-        }
+        self.ensure_compositor()?;
 
         let device = self
             .device
@@ -189,49 +394,137 @@ impl PassBackend for VelloBackend {
             .queue
             .as_ref()
             .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
-        let target_view = self
-            .target_view
+        let compositor = self
+            .compositor
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu compositor not initialized"))?;
+
+        let target = self.surfaces.get(&pass.target).ok_or_else(|| {
+            WavyteError::evaluation(format!(
+                "composite target surface {:?} was not initialized",
+                pass.target
+            ))
+        })?;
+
+        let clear = match self.settings.clear_rgba {
+            Some([r, g, b, a]) => vello::wgpu::Color {
+                r: (r as f64) / 255.0,
+                g: (g as f64) / 255.0,
+                b: (b as f64) / 255.0,
+                a: (a as f64) / 255.0,
+            },
+            None => vello::wgpu::Color::TRANSPARENT,
+        };
+
+        let mut encoder = device.create_command_encoder(&vello::wgpu::CommandEncoderDescriptor {
+            label: Some("wavyte_composite_encoder"),
+        });
+
+        {
+            let mut rp = encoder.begin_render_pass(&vello::wgpu::RenderPassDescriptor {
+                label: Some("wavyte_composite_rp"),
+                color_attachments: &[Some(vello::wgpu::RenderPassColorAttachment {
+                    view: &target.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: vello::wgpu::Operations {
+                        load: vello::wgpu::LoadOp::Clear(clear),
+                        store: vello::wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            rp.set_pipeline(&compositor.pipeline);
+
+            for op in &pass.ops {
+                match *op {
+                    CompositeOp::Over { src, opacity } => {
+                        let src = self.surfaces.get(&src).ok_or_else(|| {
+                            WavyteError::evaluation(format!(
+                                "composite src surface {:?} was not initialized",
+                                src
+                            ))
+                        })?;
+
+                        let opacity = opacity.clamp(0.0, 1.0);
+                        let mut params = [0u8; 16];
+                        params[0..4].copy_from_slice(&opacity.to_le_bytes());
+                        queue.write_buffer(&compositor.params, 0, &params);
+
+                        let bind_group =
+                            device.create_bind_group(&vello::wgpu::BindGroupDescriptor {
+                                label: Some("wavyte_composite_bg"),
+                                layout: &compositor.bind_group_layout,
+                                entries: &[
+                                    vello::wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: vello::wgpu::BindingResource::TextureView(
+                                            &src.view,
+                                        ),
+                                    },
+                                    vello::wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: vello::wgpu::BindingResource::Sampler(
+                                            &compositor.sampler,
+                                        ),
+                                    },
+                                    vello::wgpu::BindGroupEntry {
+                                        binding: 2,
+                                        resource: compositor.params.as_entire_binding(),
+                                    },
+                                ],
+                            });
+                        rp.set_bind_group(0, &bind_group, &[]);
+                        rp.draw(0..3, 0..1);
+                    }
+                    CompositeOp::Crossfade { .. } | CompositeOp::Wipe { .. } => {
+                        return Err(WavyteError::evaluation(
+                            "gpu composite crossfade/wipe is not implemented yet (phase 5)",
+                        ));
+                    }
+                }
+            }
+        }
+
+        queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    fn readback_rgba8(
+        &mut self,
+        surface: SurfaceId,
+        plan: &crate::compile::RenderPlan,
+        _assets: &mut dyn AssetCache,
+    ) -> WavyteResult<FrameRGBA> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        let queue = self
+            .queue
             .as_ref()
             .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
         let readback = self
             .readback
             .as_ref()
             .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
-        let target_tex = self
-            .target_texture
-            .as_ref()
-            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
 
-        let base_color = match self.settings.clear_rgba {
-            Some([r, g, b, a]) => vello::peniko::Color::from_rgba8(r, g, b, a),
-            None => vello::peniko::Color::from_rgba8(0, 0, 0, 0),
-        };
-
-        let renderer = self
-            .renderer
-            .as_mut()
-            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
-        renderer
-            .render_to_texture(
-                device,
-                queue,
-                &self.scene,
-                target_view,
-                &vello::RenderParams {
-                    base_color,
-                    width: plan.canvas.width,
-                    height: plan.canvas.height,
-                    antialiasing_method: vello::AaConfig::Area,
-                },
-            )
-            .map_err(|e| WavyteError::evaluation(format!("vello render failed: {e:?}")))?;
+        let surface = self.surfaces.get(&surface).ok_or_else(|| {
+            WavyteError::evaluation(format!(
+                "readback surface {:?} was not initialized",
+                surface
+            ))
+        })?;
 
         let mut encoder = device.create_command_encoder(&vello::wgpu::CommandEncoderDescriptor {
             label: Some("wavyte_readback_encoder"),
         });
         encoder.copy_texture_to_buffer(
             vello::wgpu::TexelCopyTextureInfo {
-                texture: target_tex,
+                texture: &surface.texture,
                 mip_level: 0,
                 origin: vello::wgpu::Origin3d::ZERO,
                 aspect: vello::wgpu::TextureAspect::All,
