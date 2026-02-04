@@ -6,6 +6,7 @@ mod anim_ops;
 mod anim_proc;
 mod assets;
 mod assets_decode;
+mod compile;
 mod core;
 mod dsl;
 mod error;
@@ -20,6 +21,7 @@ pub use assets::{
     PreparedText, TextBrushRgba8, TextLayoutEngine,
 };
 pub use assets_decode::{decode_image, parse_svg};
+pub use compile::{DrawOp, Pass, RenderPlan, ScenePass, compile_frame};
 pub use core::{
     Affine, BezPath, Canvas, Fps, FrameIndex, FrameRange, Point, Rect, Rgba8Premul, Transform2D,
     Vec2,
