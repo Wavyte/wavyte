@@ -1,0 +1,49 @@
+{
+  "fps": { "num": 30, "den": 1 },
+  "canvas": { "width": 640, "height": 360 },
+  "duration": 20,
+  "assets": {
+    "t0": { "Text": { "text": "hello" } }
+  },
+  "tracks": [
+    {
+      "name": "main",
+      "z_base": 0,
+      "clips": [
+        {
+          "id": "c0",
+          "asset": "t0",
+          "range": { "start": 0, "end": 20 },
+          "props": {
+            "transform": {
+              "Keyframes": {
+                "keys": [
+                  { "frame": 0, "value": { "translate": { "x": 0.0, "y": 0.0 }, "rotation_rad": 0.0, "scale": { "x": 1.0, "y": 1.0 }, "anchor": { "x": 0.0, "y": 0.0 } }, "ease": "Linear" }
+                ],
+                "mode": "Hold",
+                "default": null
+              }
+            },
+            "opacity": {
+              "Keyframes": {
+                "keys": [
+                  { "frame": 0, "value": 0.0, "ease": "Linear" },
+                  { "frame": 10, "value": 1.0, "ease": "Linear" }
+                ],
+                "mode": "Linear",
+                "default": null
+              }
+            },
+            "blend": "Normal"
+          },
+          "z_offset": 0,
+          "effects": [],
+          "transition_in": { "kind": "crossfade", "duration_frames": 3, "ease": "Linear" },
+          "transition_out": { "kind": "crossfade", "duration_frames": 3, "ease": "Linear" }
+        }
+      ]
+    }
+  ],
+  "seed": 1
+}
+
