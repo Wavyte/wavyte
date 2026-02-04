@@ -54,9 +54,13 @@ pub use model::{
     PathAsset, SvgAsset, TextAsset, Track, TransitionSpec, VideoAsset,
 };
 pub use pipeline::render_frame;
+pub use pipeline::render_frames;
 pub use render::{BackendKind, FrameRGBA, RenderBackend, RenderSettings, create_backend};
 pub use render_passes::{PassBackend, execute_plan};
 pub use transitions::{TransitionKind, WipeDir, parse_transition};
+
+#[cfg(feature = "ffmpeg")]
+pub use pipeline::{RenderToMp4Opts, render_to_mp4};
 
 #[cfg(feature = "ffmpeg")]
 pub use encode_ffmpeg::{
