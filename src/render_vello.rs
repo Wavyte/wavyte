@@ -22,6 +22,12 @@ struct Compositor {
     params: vello::wgpu::Buffer,
 }
 
+struct BlurCompute {
+    pipeline: vello::wgpu::ComputePipeline,
+    bind_group_layout: vello::wgpu::BindGroupLayout,
+    params: vello::wgpu::Buffer,
+}
+
 pub struct VelloBackend {
     settings: RenderSettings,
 
@@ -37,6 +43,8 @@ pub struct VelloBackend {
 
     surfaces: HashMap<SurfaceId, GpuSurface>,
     compositor: Option<Compositor>,
+    blur: Option<BlurCompute>,
+    blur_temp: Option<GpuSurface>,
 
     image_cache: HashMap<AssetId, vello::peniko::ImageData>,
     font_cache: HashMap<AssetId, vello::peniko::FontData>,
@@ -56,6 +64,8 @@ impl VelloBackend {
             height: 0,
             surfaces: HashMap::new(),
             compositor: None,
+            blur: None,
+            blur_temp: None,
             image_cache: HashMap::new(),
             font_cache: HashMap::new(),
         })
@@ -122,6 +132,8 @@ impl VelloBackend {
         self.height = height;
         self.surfaces.clear();
         self.compositor = None;
+        self.blur = None;
+        self.blur_temp = None;
         self.image_cache.clear();
         self.font_cache.clear();
         Ok(())
@@ -318,6 +330,132 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 
         Ok(())
     }
+
+    fn ensure_blur(&mut self) -> WavyteResult<()> {
+        if self.blur.is_some() {
+            return Ok(());
+        }
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+
+        let params = device.create_buffer(&vello::wgpu::BufferDescriptor {
+            label: Some("wavyte_blur_params"),
+            size: 16,
+            usage: vello::wgpu::BufferUsages::UNIFORM | vello::wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_layout =
+            device.create_bind_group_layout(&vello::wgpu::BindGroupLayoutDescriptor {
+                label: Some("wavyte_blur_bgl"),
+                entries: &[
+                    vello::wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: vello::wgpu::ShaderStages::COMPUTE,
+                        ty: vello::wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: vello::wgpu::TextureViewDimension::D2,
+                            sample_type: vello::wgpu::TextureSampleType::Float {
+                                filterable: false,
+                            },
+                        },
+                        count: None,
+                    },
+                    vello::wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: vello::wgpu::ShaderStages::COMPUTE,
+                        ty: vello::wgpu::BindingType::StorageTexture {
+                            access: vello::wgpu::StorageTextureAccess::WriteOnly,
+                            format: vello::wgpu::TextureFormat::Rgba8Unorm,
+                            view_dimension: vello::wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    vello::wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: vello::wgpu::ShaderStages::COMPUTE,
+                        ty: vello::wgpu::BindingType::Buffer {
+                            ty: vello::wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: Some(std::num::NonZeroU64::new(16).unwrap()),
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let shader = device.create_shader_module(vello::wgpu::ShaderModuleDescriptor {
+            label: Some("wavyte_blur_shader"),
+            source: vello::wgpu::ShaderSource::Wgsl(
+                r#"
+@group(0) @binding(0) var t_in: texture_2d<f32>;
+@group(0) @binding(1) var t_out: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var<uniform> params: vec4<f32>;
+
+fn gauss(x: f32, sigma: f32) -> f32 {
+  let s = max(sigma, 1e-4);
+  return exp(-0.5 * (x * x) / (s * s));
+}
+
+@compute @workgroup_size(16, 16, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let dims = textureDimensions(t_in);
+  if (gid.x >= dims.x || gid.y >= dims.y) { return; }
+
+  let sigma = params.x;
+  let radius = i32(params.y + 0.5);
+  let dir = i32(params.z + 0.5); // 0 = horizontal, 1 = vertical
+
+  var sum = vec4<f32>(0.0);
+  var wsum = 0.0;
+
+  for (var i: i32 = -radius; i <= radius; i = i + 1) {
+    let w = gauss(f32(i), sigma);
+    var sx: i32 = i32(gid.x);
+    var sy: i32 = i32(gid.y);
+    if (dir == 0) {
+      sx = clamp(sx + i, 0, i32(dims.x) - 1);
+    } else {
+      sy = clamp(sy + i, 0, i32(dims.y) - 1);
+    }
+    let c = textureLoad(t_in, vec2<i32>(sx, sy), 0);
+    sum = sum + c * w;
+    wsum = wsum + w;
+  }
+
+  let out = sum / max(wsum, 1e-6);
+  textureStore(t_out, vec2<i32>(i32(gid.x), i32(gid.y)), out);
+}
+"#
+                .into(),
+            ),
+        });
+
+        let pipeline_layout =
+            device.create_pipeline_layout(&vello::wgpu::PipelineLayoutDescriptor {
+                label: Some("wavyte_blur_pl"),
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let pipeline = device.create_compute_pipeline(&vello::wgpu::ComputePipelineDescriptor {
+            label: Some("wavyte_blur_pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: vello::wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        self.blur = Some(BlurCompute {
+            pipeline,
+            bind_group_layout,
+            params,
+        });
+        Ok(())
+    }
 }
 
 impl PassBackend for VelloBackend {
@@ -423,9 +561,166 @@ impl PassBackend for VelloBackend {
 
     fn exec_offscreen(
         &mut self,
-        _pass: &crate::compile::OffscreenPass,
+        pass: &crate::compile::OffscreenPass,
         _assets: &mut dyn AssetCache,
     ) -> WavyteResult<()> {
+        self.ensure_blur()?;
+
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        let queue = self
+            .queue
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu backend not initialized"))?;
+        let blur = self
+            .blur
+            .as_ref()
+            .ok_or_else(|| WavyteError::evaluation("gpu blur pipeline not initialized"))?;
+
+        let input = self.surfaces.get(&pass.input).ok_or_else(|| {
+            WavyteError::evaluation(format!(
+                "offscreen input surface {:?} was not initialized",
+                pass.input
+            ))
+        })?;
+        let output = self.surfaces.get(&pass.output).ok_or_else(|| {
+            WavyteError::evaluation(format!(
+                "offscreen output surface {:?} was not initialized",
+                pass.output
+            ))
+        })?;
+
+        if input.width != output.width || input.height != output.height {
+            return Err(WavyteError::evaluation(
+                "offscreen input/output surface size mismatch",
+            ));
+        }
+
+        let needs_temp = self
+            .blur_temp
+            .as_ref()
+            .map(|t| t.width != input.width || t.height != input.height)
+            .unwrap_or(true);
+        if needs_temp {
+            let tex = device.create_texture(&vello::wgpu::TextureDescriptor {
+                label: Some("wavyte_blur_temp"),
+                size: vello::wgpu::Extent3d {
+                    width: input.width,
+                    height: input.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: vello::wgpu::TextureDimension::D2,
+                format: vello::wgpu::TextureFormat::Rgba8Unorm,
+                usage: vello::wgpu::TextureUsages::STORAGE_BINDING
+                    | vello::wgpu::TextureUsages::TEXTURE_BINDING
+                    | vello::wgpu::TextureUsages::COPY_SRC
+                    | vello::wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&vello::wgpu::TextureViewDescriptor::default());
+            self.blur_temp = Some(GpuSurface {
+                width: input.width,
+                height: input.height,
+                texture: tex,
+                view,
+            });
+        }
+        let temp = self.blur_temp.as_ref().unwrap();
+
+        let (radius_px, sigma) = match pass.fx {
+            crate::fx::PassFx::Blur { radius_px, sigma } => (radius_px, sigma),
+        };
+        if radius_px == 0 {
+            return Ok(());
+        }
+        if !sigma.is_finite() || sigma <= 0.0 {
+            return Err(WavyteError::validation("blur sigma must be > 0"));
+        }
+
+        let groups_x = input.width.div_ceil(16);
+        let groups_y = input.height.div_ceil(16);
+
+        let mut encoder = device.create_command_encoder(&vello::wgpu::CommandEncoderDescriptor {
+            label: Some("wavyte_blur_encoder"),
+        });
+
+        // Horizontal: input -> temp
+        {
+            let mut params = [0u8; 16];
+            params[0..4].copy_from_slice(&sigma.to_le_bytes());
+            params[4..8].copy_from_slice(&(radius_px as f32).to_le_bytes());
+            params[8..12].copy_from_slice(&0.0f32.to_le_bytes());
+            queue.write_buffer(&blur.params, 0, &params);
+
+            let bg = device.create_bind_group(&vello::wgpu::BindGroupDescriptor {
+                label: Some("wavyte_blur_bg_h"),
+                layout: &blur.bind_group_layout,
+                entries: &[
+                    vello::wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: vello::wgpu::BindingResource::TextureView(&input.view),
+                    },
+                    vello::wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: vello::wgpu::BindingResource::TextureView(&temp.view),
+                    },
+                    vello::wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: blur.params.as_entire_binding(),
+                    },
+                ],
+            });
+
+            let mut cp = encoder.begin_compute_pass(&vello::wgpu::ComputePassDescriptor {
+                label: Some("wavyte_blur_cp_h"),
+                timestamp_writes: None,
+            });
+            cp.set_pipeline(&blur.pipeline);
+            cp.set_bind_group(0, &bg, &[]);
+            cp.dispatch_workgroups(groups_x, groups_y, 1);
+        }
+
+        // Vertical: temp -> output
+        {
+            let mut params = [0u8; 16];
+            params[0..4].copy_from_slice(&sigma.to_le_bytes());
+            params[4..8].copy_from_slice(&(radius_px as f32).to_le_bytes());
+            params[8..12].copy_from_slice(&1.0f32.to_le_bytes());
+            queue.write_buffer(&blur.params, 0, &params);
+
+            let bg = device.create_bind_group(&vello::wgpu::BindGroupDescriptor {
+                label: Some("wavyte_blur_bg_v"),
+                layout: &blur.bind_group_layout,
+                entries: &[
+                    vello::wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: vello::wgpu::BindingResource::TextureView(&temp.view),
+                    },
+                    vello::wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: vello::wgpu::BindingResource::TextureView(&output.view),
+                    },
+                    vello::wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: blur.params.as_entire_binding(),
+                    },
+                ],
+            });
+
+            let mut cp = encoder.begin_compute_pass(&vello::wgpu::ComputePassDescriptor {
+                label: Some("wavyte_blur_cp_v"),
+                timestamp_writes: None,
+            });
+            cp.set_pipeline(&blur.pipeline);
+            cp.set_bind_group(0, &bg, &[]);
+            cp.dispatch_workgroups(groups_x, groups_y, 1);
+        }
+
+        queue.submit(Some(encoder.finish()));
         Ok(())
     }
 
