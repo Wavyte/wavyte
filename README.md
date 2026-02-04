@@ -83,19 +83,16 @@ This repository is currently implementing **Wavyte v0.1.0**. As of **end of Phas
 
 ## Features
 
-Wavyte uses Cargo features to keep GPU dependencies optional while still working out-of-box.
+Wavyte keeps GPU dependencies optional while still working out-of-box.
 
-- `default` = `["cpu", "cli"]`
-  - CPU renderer is available by default (`BackendKind::Cpu`).
-  - The `wavyte` CLI binary is built by default.
+- CPU backend (`BackendKind::Cpu`) is always available (no Cargo feature gate).
+- The `wavyte` CLI binary is always built (no Cargo feature gate).
 - `gpu`
-  - Enables `BackendKind::Gpu` using `vello` + `wgpu` with offscreen render + readback.
-  - Note: when `wgpu` is built with `default-features = false`, you must enable at least one backend
-    (DX12/Metal/Vulkan/GLES). This crate’s `gpu` feature wires those on Linux/Windows/macOS.
-- `cpu`
-  - Enables the CPU backend and CPU SVG rendering via `resvg`.
-- `cli`
-  - Enables the `wavyte` CLI binary (included in `default`).
+  - Enables `BackendKind::Gpu` using `vello` + `wgpu` with readback to RGBA8.
+  - Note: `wgpu` is built with `default-features = false`; the `gpu` feature wires common native backends
+    (DX12/Metal/Vulkan/GLES) so it works on Linux/Windows/macOS.
+
+`ffmpeg` is a runtime prerequisite for MP4 encoding (not a Cargo feature).
 
 ## Backends
 
@@ -232,15 +229,12 @@ Run the full quality gate (required before commits in this repo):
 
 - `cargo fmt --all`
 - `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test --all-targets --no-default-features`
+- `cargo test --all-targets`
 - `cargo test --all-targets --features gpu`
-- `cargo test --all-targets --features cpu`
-- `cargo test --all-targets --features gpu,cpu`
 
 Notes:
 
-- The CPU renderer tests are `#[cfg(feature="cpu")]`, so with `default = ["cpu","cli"]` they run under `cargo test`.
-  Under `--no-default-features`, those tests compile out and you’ll see “0 tests” for those targets.
+- CPU renderer tests are not feature-gated; they run under the default test invocation.
 - GPU tests skip if the environment has no adapter (they treat `"no gpu adapter available"` as a skip).
 
 ## Known limitations (v0.1.0)

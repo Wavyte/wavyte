@@ -1,14 +1,11 @@
-#[cfg(any(feature = "cpu", feature = "gpu"))]
 use std::collections::BTreeMap;
 
-#[cfg(any(feature = "cpu", feature = "gpu"))]
 use wavyte::{
     Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, FrameIndex,
     FrameRange, FsAssetCache, ImageAsset, PathAsset, RenderSettings, SvgAsset, TextAsset, Track,
     Transform2D, create_backend, render_frame,
 };
 
-#[cfg(any(feature = "cpu", feature = "gpu"))]
 fn first_asset_path_with_ext(ext: &str) -> Option<String> {
     let dir = std::path::Path::new("assets");
     let rd = std::fs::read_dir(dir).ok()?;
@@ -35,7 +32,6 @@ fn first_asset_path_with_ext(ext: &str) -> Option<String> {
     names.first().map(|n| format!("assets/{n}"))
 }
 
-#[cfg(any(feature = "cpu", feature = "gpu"))]
 fn build_comp() -> Composition {
     let mut assets = BTreeMap::<String, Asset>::new();
 
@@ -173,7 +169,6 @@ fn build_comp() -> Composition {
     }
 }
 
-#[cfg(any(feature = "cpu", feature = "gpu"))]
 fn parse_backend() -> Option<&'static str> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
@@ -183,13 +178,14 @@ fn parse_backend() -> Option<&'static str> {
     }
 }
 
-#[cfg(not(any(feature = "cpu", feature = "gpu")))]
 fn main() {
-    eprintln!("build with `--features cpu` and/or `--features gpu`");
+    if let Err(e) = try_main() {
+        eprintln!("{e:?}");
+        std::process::exit(1);
+    }
 }
 
-#[cfg(any(feature = "cpu", feature = "gpu"))]
-fn main() -> anyhow::Result<()> {
+fn try_main() -> anyhow::Result<()> {
     let comp = build_comp();
     comp.validate()?;
 
@@ -198,38 +194,12 @@ fn main() -> anyhow::Result<()> {
     };
 
     let kind = match parse_backend() {
-        Some("cpu") => {
-            #[cfg(feature = "cpu")]
-            {
-                BackendKind::Cpu
-            }
-            #[cfg(not(feature = "cpu"))]
-            {
-                anyhow::bail!("built without `cpu` feature")
-            }
-        }
+        Some("cpu") | None => BackendKind::Cpu,
         Some("gpu") => {
-            #[cfg(feature = "gpu")]
-            {
+            if cfg!(feature = "gpu") {
                 BackendKind::Gpu
-            }
-            #[cfg(not(feature = "gpu"))]
-            {
+            } else {
                 anyhow::bail!("built without `gpu` feature")
-            }
-        }
-        None => {
-            #[cfg(feature = "cpu")]
-            {
-                BackendKind::Cpu
-            }
-            #[cfg(all(not(feature = "cpu"), feature = "gpu"))]
-            {
-                BackendKind::Gpu
-            }
-            #[cfg(all(not(feature = "cpu"), not(feature = "gpu")))]
-            {
-                unreachable!()
             }
         }
         _ => unreachable!(),

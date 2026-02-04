@@ -1,13 +1,13 @@
-#[cfg(all(feature = "cpu", feature = "gpu"))]
+#[cfg(feature = "gpu")]
 use std::collections::BTreeMap;
 
-#[cfg(all(feature = "cpu", feature = "gpu"))]
+#[cfg(feature = "gpu")]
 use wavyte::{
     Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, FrameIndex,
     FrameRange, PathAsset, RenderSettings, Track, Transform2D, create_backend, render_frame,
 };
 
-#[cfg(all(feature = "cpu", feature = "gpu"))]
+#[cfg(feature = "gpu")]
 fn rmse_u8(a: &[u8], b: &[u8]) -> f64 {
     let n = a.len().min(b.len()).max(1) as f64;
     let mut sum = 0.0f64;
@@ -18,9 +18,9 @@ fn rmse_u8(a: &[u8], b: &[u8]) -> f64 {
     (sum / n).sqrt()
 }
 
-#[cfg(all(feature = "cpu", feature = "gpu"))]
+#[cfg(feature = "gpu")]
 struct NoAssets;
-#[cfg(all(feature = "cpu", feature = "gpu"))]
+#[cfg(feature = "gpu")]
 impl wavyte::AssetCache for NoAssets {
     fn id_for(&mut self, _asset: &Asset) -> wavyte::WavyteResult<wavyte::AssetId> {
         Err(wavyte::WavyteError::evaluation("no assets in this example"))
@@ -36,7 +36,7 @@ impl wavyte::AssetCache for NoAssets {
     }
 }
 
-#[cfg(all(feature = "cpu", feature = "gpu"))]
+#[cfg(feature = "gpu")]
 fn build_comp() -> Composition {
     let mut assets = BTreeMap::new();
     assets.insert(
@@ -76,12 +76,12 @@ fn build_comp() -> Composition {
     }
 }
 
-#[cfg(not(all(feature = "cpu", feature = "gpu")))]
+#[cfg(not(feature = "gpu"))]
 fn main() -> anyhow::Result<()> {
-    anyhow::bail!("build with `--features gpu,cpu`")
+    anyhow::bail!("build with `--features gpu`")
 }
 
-#[cfg(all(feature = "cpu", feature = "gpu"))]
+#[cfg(feature = "gpu")]
 fn main() -> anyhow::Result<()> {
     let comp = build_comp();
     comp.validate()?;

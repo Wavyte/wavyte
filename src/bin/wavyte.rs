@@ -83,23 +83,11 @@ fn make_backend(
     settings: &wavyte::RenderSettings,
 ) -> anyhow::Result<Box<dyn wavyte::RenderBackend>> {
     let kind = match choice {
-        BackendChoice::Cpu => {
-            #[cfg(feature = "cpu")]
-            {
-                wavyte::BackendKind::Cpu
-            }
-            #[cfg(not(feature = "cpu"))]
-            {
-                anyhow::bail!("built without `cpu` feature")
-            }
-        }
+        BackendChoice::Cpu => wavyte::BackendKind::Cpu,
         BackendChoice::Gpu => {
-            #[cfg(feature = "gpu")]
-            {
+            if cfg!(feature = "gpu") {
                 wavyte::BackendKind::Gpu
-            }
-            #[cfg(not(feature = "gpu"))]
-            {
+            } else {
                 anyhow::bail!("built without `gpu` feature")
             }
         }

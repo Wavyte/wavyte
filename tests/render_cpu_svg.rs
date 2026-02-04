@@ -1,4 +1,3 @@
-#[cfg(feature = "cpu")]
 mod cpu_svg {
     use std::collections::BTreeMap;
 

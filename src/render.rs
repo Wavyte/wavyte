@@ -1,7 +1,7 @@
 use crate::{
     assets::AssetCache,
     compile::RenderPlan,
-    error::{WavyteError, WavyteResult},
+    error::WavyteResult,
     render_passes::{PassBackend, execute_plan},
 };
 
@@ -25,9 +25,7 @@ pub trait RenderBackend: PassBackend {
 
 #[derive(Clone, Copy, Debug)]
 pub enum BackendKind {
-    #[cfg(feature = "cpu")]
     Cpu,
-    #[cfg(feature = "gpu")]
     Gpu,
 }
 
@@ -41,17 +39,23 @@ pub fn create_backend(
     _settings: &RenderSettings,
 ) -> WavyteResult<Box<dyn RenderBackend>> {
     match kind {
-        #[cfg(feature = "cpu")]
         BackendKind::Cpu => Ok(Box::new(crate::render_cpu::CpuBackend::new(
             _settings.clone(),
         ))),
-        #[cfg(feature = "gpu")]
-        BackendKind::Gpu => Ok(Box::new(crate::render_vello::VelloBackend::new(
-            _settings.clone(),
-        )?)),
-        #[allow(unreachable_patterns)]
-        _ => Err(WavyteError::evaluation(
-            "requested backend is not available",
-        )),
+        BackendKind::Gpu => {
+            #[cfg(feature = "gpu")]
+            {
+                Ok(Box::new(crate::render_vello::VelloBackend::new(
+                    _settings.clone(),
+                )?))
+            }
+            #[cfg(not(feature = "gpu"))]
+            {
+                let _ = _settings;
+                Err(crate::error::WavyteError::evaluation(
+                    "requested backend is not available (built without `gpu` feature)",
+                ))
+            }
+        }
     }
 }

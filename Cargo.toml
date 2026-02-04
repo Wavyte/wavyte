@@ -4,14 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["cpu", "cli"]
+default = []
 gpu = ["dep:vello", "dep:vello_svg", "dep:pollster", "dep:wgpu"]
-cpu = ["dep:vello_cpu", "dep:resvg"]
-cli = ["dep:clap"]
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4.5.57", optional = true, features = ["derive"] }
+clap = { version = "4.5.57", features = ["derive"] }
 image = "0.25.9"
 kurbo = { version = "0.13", features = ["serde"] }
 parley = { version = "0.7.0", default-features = false, features = ["std"] }
@@ -21,9 +19,9 @@ serde_json = "1"
 thiserror = "2"
 tracing = { version = "0.1", features = ["attributes"] }
 usvg = { version = "0.46.0", default-features = false, features = ["text"] }
-resvg = { version = "0.46.0", optional = true, default-features = false }
+resvg = { version = "0.46.0", default-features = false }
 vello = { version = "0.7.0", optional = true, default-features = false, features = ["wgpu"] }
-vello_cpu = { version = "0.0.6", optional = true, default-features = false, features = ["std", "text", "u8_pipeline"] }
+vello_cpu = { version = "0.0.6", default-features = false, features = ["std", "text", "u8_pipeline"] }
 vello_svg = { version = "0.9.0", optional = true, default-features = false }
 wgpu = { version = "27.0.1", optional = true, default-features = false, features = ["std", "wgsl", "dx12", "metal", "gles", "vulkan"] }
 
@@ -33,4 +31,3 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 [[bin]]
 name = "wavyte"
 path = "src/bin/wavyte.rs"
-required-features = ["cli"]

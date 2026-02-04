@@ -1,4 +1,3 @@
-#[cfg(feature = "cpu")]
 mod cpu {
     use std::collections::BTreeMap;
 

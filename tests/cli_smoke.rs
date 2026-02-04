@@ -1,5 +1,3 @@
-#![cfg(all(feature = "cli", feature = "cpu"))]
-
 use std::path::PathBuf;
 
 use wavyte::{

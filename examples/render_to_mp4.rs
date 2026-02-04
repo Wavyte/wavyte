@@ -1,48 +1,28 @@
-#[cfg(any(feature = "cpu", feature = "gpu"))]
 use std::collections::BTreeMap;
-
-#[cfg(any(feature = "cpu", feature = "gpu"))]
 use std::path::PathBuf;
 
-#[cfg(any(feature = "cpu", feature = "gpu"))]
 use wavyte::{
     Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, Fps, FrameIndex,
     FrameRange, PathAsset, RenderSettings, RenderToMp4Opts, Track, Transform2D, TransitionSpec,
     Vec2, create_backend, render_frame, render_to_mp4,
 };
 
-#[cfg(any(feature = "cpu", feature = "gpu"))]
-fn parse_backend() -> BackendKind {
+fn parse_backend() -> anyhow::Result<BackendKind> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("gpu") => {
-            #[cfg(feature = "gpu")]
-            {
-                BackendKind::Gpu
-            }
-            #[cfg(not(feature = "gpu"))]
-            {
-                BackendKind::Cpu
-            }
-        }
-        _ => {
-            #[cfg(feature = "cpu")]
-            {
-                BackendKind::Cpu
-            }
-            #[cfg(all(not(feature = "cpu"), feature = "gpu"))]
-            {
-                BackendKind::Gpu
-            }
-            #[cfg(all(not(feature = "cpu"), not(feature = "gpu")))]
-            {
-                unreachable!()
+            if cfg!(feature = "gpu") {
+                Ok(BackendKind::Gpu)
+            } else {
+                Err(anyhow::anyhow!(
+                    "requested GPU backend, but this binary was built without `--features gpu`"
+                ))
             }
         }
+        _ => Ok(BackendKind::Cpu),
     }
 }
 
-#[cfg(any(feature = "cpu", feature = "gpu"))]
 fn build_comp() -> Composition {
     let mut assets = BTreeMap::<String, Asset>::new();
     assets.insert(
@@ -125,13 +105,14 @@ fn build_comp() -> Composition {
     }
 }
 
-#[cfg(not(any(feature = "cpu", feature = "gpu")))]
 fn main() {
-    eprintln!("build with `--features cpu` (and optionally `gpu`) to run this example");
+    if let Err(err) = try_main() {
+        eprintln!("{err:#}");
+        std::process::exit(1);
+    }
 }
 
-#[cfg(any(feature = "cpu", feature = "gpu"))]
-fn main() -> anyhow::Result<()> {
+fn try_main() -> anyhow::Result<()> {
     let comp = build_comp();
     comp.validate()?;
 
@@ -143,7 +124,7 @@ fn main() -> anyhow::Result<()> {
     let settings = RenderSettings {
         clear_rgba: Some([18, 20, 28, 255]),
     };
-    let mut backend = create_backend(parse_backend(), &settings)?;
+    let mut backend = create_backend(parse_backend()?, &settings)?;
     let mut assets = wavyte::FsAssetCache::new(".");
 
     // Write a single frame PNG for quick sanity checking.

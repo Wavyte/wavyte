@@ -1,4 +1,4 @@
-#[cfg(all(feature = "cpu", feature = "gpu"))]
+#[cfg(feature = "gpu")]
 mod parity {
     use std::collections::BTreeMap;
 
