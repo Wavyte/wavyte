@@ -1,17 +1,17 @@
-#[cfg(all(feature = "ffmpeg", any(feature = "cpu", feature = "gpu")))]
+#[cfg(any(feature = "cpu", feature = "gpu"))]
 use std::collections::BTreeMap;
 
-#[cfg(all(feature = "ffmpeg", any(feature = "cpu", feature = "gpu")))]
+#[cfg(any(feature = "cpu", feature = "gpu"))]
 use std::path::PathBuf;
 
-#[cfg(all(feature = "ffmpeg", any(feature = "cpu", feature = "gpu")))]
+#[cfg(any(feature = "cpu", feature = "gpu"))]
 use wavyte::{
     Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, Fps, FrameIndex,
     FrameRange, PathAsset, RenderSettings, RenderToMp4Opts, Track, Transform2D, TransitionSpec,
     Vec2, create_backend, render_frame, render_to_mp4,
 };
 
-#[cfg(all(feature = "ffmpeg", any(feature = "cpu", feature = "gpu")))]
+#[cfg(any(feature = "cpu", feature = "gpu"))]
 fn parse_backend() -> BackendKind {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
@@ -42,7 +42,7 @@ fn parse_backend() -> BackendKind {
     }
 }
 
-#[cfg(all(feature = "ffmpeg", any(feature = "cpu", feature = "gpu")))]
+#[cfg(any(feature = "cpu", feature = "gpu"))]
 fn build_comp() -> Composition {
     let mut assets = BTreeMap::<String, Asset>::new();
     assets.insert(
@@ -125,12 +125,12 @@ fn build_comp() -> Composition {
     }
 }
 
-#[cfg(not(all(feature = "ffmpeg", any(feature = "cpu", feature = "gpu"))))]
+#[cfg(not(any(feature = "cpu", feature = "gpu")))]
 fn main() {
-    eprintln!("build with `--features ffmpeg,cpu` (and optionally `gpu`) to run this example");
+    eprintln!("build with `--features cpu` (and optionally `gpu`) to run this example");
 }
 
-#[cfg(all(feature = "ffmpeg", any(feature = "cpu", feature = "gpu")))]
+#[cfg(any(feature = "cpu", feature = "gpu"))]
 fn main() -> anyhow::Result<()> {
     let comp = build_comp();
     comp.validate()?;

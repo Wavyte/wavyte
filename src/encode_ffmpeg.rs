@@ -96,6 +96,12 @@ impl FfmpegEncoder {
             )));
         }
 
+        if !is_ffmpeg_on_path() {
+            return Err(WavyteError::evaluation(
+                "ffmpeg is required for MP4 encoding, but was not found on PATH",
+            ));
+        }
+
         // We intentionally use the system `ffmpeg` binary rather than `ffmpeg-next` to avoid
         // native FFmpeg dev header/lib requirements.
         let mut cmd = Command::new("ffmpeg");

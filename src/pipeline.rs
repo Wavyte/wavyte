@@ -38,7 +38,6 @@ pub fn render_frames(
     Ok(out)
 }
 
-#[cfg(feature = "ffmpeg")]
 #[derive(Clone, Debug)]
 pub struct RenderToMp4Opts {
     pub range: FrameRange,
@@ -46,7 +45,6 @@ pub struct RenderToMp4Opts {
     pub overwrite: bool,
 }
 
-#[cfg(feature = "ffmpeg")]
 impl Default for RenderToMp4Opts {
     fn default() -> Self {
         Self {
@@ -60,7 +58,6 @@ impl Default for RenderToMp4Opts {
     }
 }
 
-#[cfg(feature = "ffmpeg")]
 pub fn render_to_mp4(
     comp: &Composition,
     out_path: impl Into<std::path::PathBuf>,
@@ -88,6 +85,12 @@ pub fn render_to_mp4(
     };
 
     let out_path = out_path.into();
+    if !crate::encode_ffmpeg::is_ffmpeg_on_path() {
+        return Err(WavyteError::evaluation(
+            "ffmpeg is required for MP4 rendering, but was not found on PATH",
+        ));
+    }
+
     let cfg = crate::encode_ffmpeg::EncodeConfig {
         width: comp.canvas.width,
         height: comp.canvas.height,

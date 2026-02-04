@@ -9,7 +9,6 @@ mod assets_decode;
 mod compile;
 mod core;
 mod dsl;
-#[cfg(feature = "ffmpeg")]
 mod encode_ffmpeg;
 mod error;
 mod eval;
@@ -53,16 +52,11 @@ pub use model::{
     Asset, AudioAsset, BlendMode, Clip, ClipProps, Composition, EffectInstance, ImageAsset,
     PathAsset, SvgAsset, TextAsset, Track, TransitionSpec, VideoAsset,
 };
-pub use pipeline::render_frame;
-pub use pipeline::render_frames;
+pub use pipeline::{RenderToMp4Opts, render_frame, render_frames, render_to_mp4};
 pub use render::{BackendKind, FrameRGBA, RenderBackend, RenderSettings, create_backend};
 pub use render_passes::{PassBackend, execute_plan};
 pub use transitions::{TransitionKind, WipeDir, parse_transition};
 
-#[cfg(feature = "ffmpeg")]
-pub use pipeline::{RenderToMp4Opts, render_to_mp4};
-
-#[cfg(feature = "ffmpeg")]
 pub use encode_ffmpeg::{
     EncodeConfig, FfmpegEncoder, default_mp4_config, ensure_parent_dir, is_ffmpeg_on_path,
 };

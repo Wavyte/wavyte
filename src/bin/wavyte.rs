@@ -18,7 +18,7 @@ struct Cli {
 enum Command {
     /// Render a single frame as a PNG.
     Frame(FrameArgs),
-    /// Render an MP4 video (requires `--features ffmpeg`).
+    /// Render an MP4 video (requires `ffmpeg` on PATH).
     Render(RenderArgs),
 }
 
@@ -148,34 +148,25 @@ fn cmd_frame(args: FrameArgs) -> anyhow::Result<()> {
 }
 
 fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
-    #[cfg(not(feature = "ffmpeg"))]
-    {
-        let _ = args;
-        anyhow::bail!("render requires building with `--features ffmpeg`")
-    }
+    let comp = read_comp_json(&args.in_path)?;
+    comp.validate()?;
 
-    #[cfg(feature = "ffmpeg")]
-    {
-        let comp = read_comp_json(&args.in_path)?;
-        comp.validate()?;
+    let settings = wavyte::RenderSettings {
+        clear_rgba: Some([18, 20, 28, 255]),
+    };
+    let mut backend = make_backend(args.backend, &settings)?;
 
-        let settings = wavyte::RenderSettings {
-            clear_rgba: Some([18, 20, 28, 255]),
-        };
-        let mut backend = make_backend(args.backend, &settings)?;
+    let assets_root = args.in_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut assets = wavyte::FsAssetCache::new(assets_root);
 
-        let assets_root = args.in_path.parent().unwrap_or_else(|| Path::new("."));
-        let mut assets = wavyte::FsAssetCache::new(assets_root);
+    let opts = wavyte::RenderToMp4Opts {
+        range: wavyte::FrameRange::new(wavyte::FrameIndex(0), comp.duration)?,
+        bg_rgba: settings.clear_rgba.unwrap_or([0, 0, 0, 255]),
+        overwrite: true,
+    };
 
-        let opts = wavyte::RenderToMp4Opts {
-            range: wavyte::FrameRange::new(wavyte::FrameIndex(0), comp.duration)?,
-            bg_rgba: settings.clear_rgba.unwrap_or([0, 0, 0, 255]),
-            overwrite: true,
-        };
+    wavyte::render_to_mp4(&comp, &args.out, opts, backend.as_mut(), &mut assets)?;
 
-        wavyte::render_to_mp4(&comp, &args.out, opts, backend.as_mut(), &mut assets)?;
-
-        eprintln!("wrote {}", args.out.display());
-        Ok(())
-    }
+    eprintln!("wrote {}", args.out.display());
+    Ok(())
 }

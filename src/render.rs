@@ -29,8 +29,6 @@ pub enum BackendKind {
     Cpu,
     #[cfg(feature = "gpu")]
     Gpu,
-    #[cfg(feature = "hybrid")]
-    Hybrid,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -51,8 +49,6 @@ pub fn create_backend(
         BackendKind::Gpu => Ok(Box::new(crate::render_vello::VelloBackend::new(
             _settings.clone(),
         )?)),
-        #[cfg(feature = "hybrid")]
-        BackendKind::Hybrid => Err(WavyteError::evaluation("hybrid backend is not implemented")),
         #[allow(unreachable_patterns)]
         _ => Err(WavyteError::evaluation(
             "requested backend is not available",

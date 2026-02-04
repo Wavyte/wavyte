@@ -4,13 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["cpu"]
+default = ["cpu", "cli"]
 gpu = ["dep:vello", "dep:vello_svg", "dep:pollster", "dep:wgpu"]
 cpu = ["dep:vello_cpu", "dep:resvg"]
-hybrid = []
-ffmpeg = []
 cli = ["dep:clap"]
-napi = []
 
 [dependencies]
 anyhow = "1"
