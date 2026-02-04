@@ -36,12 +36,14 @@ pub struct TextBrushRgba8 {
 #[derive(Clone)]
 pub struct PreparedText {
     pub layout: Arc<parley::Layout<TextBrushRgba8>>,
+    pub font_bytes: Arc<Vec<u8>>,
 }
 
 impl std::fmt::Debug for PreparedText {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedText")
             .field("layout_ptr", &Arc::as_ptr(&self.layout))
+            .field("font_bytes_len", &self.font_bytes.len())
             .finish()
     }
 }
@@ -204,13 +206,14 @@ impl AssetCache for FsAssetCache {
                 };
                 let layout = self.text_engine.layout_plain(
                     &a.text,
-                    font_bytes,
+                    font_bytes.as_slice(),
                     a.size_px,
                     brush,
                     a.max_width_px,
                 )?;
                 PreparedAsset::Text(PreparedText {
                     layout: Arc::new(layout),
+                    font_bytes: Arc::new(font_bytes),
                 })
             }
             model::Asset::Video(_) | model::Asset::Audio(_) | model::Asset::Path(_) => {
@@ -311,7 +314,7 @@ impl TextLayoutEngine {
     pub fn layout_plain(
         &mut self,
         text: &str,
-        font_bytes: Vec<u8>,
+        font_bytes: &[u8],
         size_px: f32,
         brush: TextBrushRgba8,
         max_width_px: Option<f32>,
@@ -325,7 +328,7 @@ impl TextLayoutEngine {
         let families = self
             .font_ctx
             .collection
-            .register_fonts(parley::fontique::Blob::from(font_bytes), None);
+            .register_fonts(parley::fontique::Blob::from(font_bytes.to_vec()), None);
         let family_id = families.first().map(|(id, _)| *id).ok_or_else(|| {
             WavyteError::validation("no font families registered from font bytes")
         })?;
@@ -441,7 +444,7 @@ mod tests {
         let layout = engine
             .layout_plain(
                 "hello",
-                font_bytes,
+                font_bytes.as_slice(),
                 48.0,
                 TextBrushRgba8 {
                     r: 255,
