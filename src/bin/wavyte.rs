@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Context as _;
 use clap::{Parser, Subcommand, ValueEnum};
+use sha2::Digest as _;
 
 #[derive(Parser, Debug)]
 #[command(name = "wavyte", version)]
@@ -39,6 +40,14 @@ struct FrameArgs {
     /// Backend to use.
     #[arg(long, value_enum, default_value_t = BackendChoice::Cpu)]
     backend: BackendChoice,
+
+    /// Print diagnostics about text font resolution (family name + SHA-256 of font bytes).
+    #[arg(long)]
+    dump_fonts: bool,
+
+    /// Print diagnostics about SVG font resolution (fontdb face count + text node count).
+    #[arg(long)]
+    dump_svg_fonts: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -54,6 +63,14 @@ struct RenderArgs {
     /// Backend to use.
     #[arg(long, value_enum, default_value_t = BackendChoice::Cpu)]
     backend: BackendChoice,
+
+    /// Print diagnostics about text font resolution (family name + SHA-256 of font bytes).
+    #[arg(long)]
+    dump_fonts: bool,
+
+    /// Print diagnostics about SVG font resolution (fontdb face count + text node count).
+    #[arg(long)]
+    dump_svg_fonts: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -109,6 +126,10 @@ fn cmd_frame(args: FrameArgs) -> anyhow::Result<()> {
     let assets_root = args.in_path.parent().unwrap_or_else(|| Path::new("."));
     let mut assets = wavyte::FsAssetCache::new(assets_root);
 
+    if args.dump_fonts || args.dump_svg_fonts {
+        dump_font_diagnostics(&comp, &mut assets, args.dump_fonts, args.dump_svg_fonts)?;
+    }
+
     let frame = wavyte::render_frame(
         &comp,
         wavyte::FrameIndex(args.frame),
@@ -147,6 +168,10 @@ fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
     let assets_root = args.in_path.parent().unwrap_or_else(|| Path::new("."));
     let mut assets = wavyte::FsAssetCache::new(assets_root);
 
+    if args.dump_fonts || args.dump_svg_fonts {
+        dump_font_diagnostics(&comp, &mut assets, args.dump_fonts, args.dump_svg_fonts)?;
+    }
+
     let opts = wavyte::RenderToMp4Opts {
         range: wavyte::FrameRange::new(wavyte::FrameIndex(0), comp.duration)?,
         bg_rgba: settings.clear_rgba.unwrap_or([0, 0, 0, 255]),
@@ -157,4 +182,79 @@ fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
 
     eprintln!("wrote {}", args.out.display());
     Ok(())
+}
+
+fn dump_font_diagnostics(
+    comp: &wavyte::Composition,
+    assets: &mut dyn wavyte::AssetCache,
+    dump_text: bool,
+    dump_svg: bool,
+) -> anyhow::Result<()> {
+    if dump_text {
+        eprintln!("text font diagnostics:");
+        for (key, asset) in &comp.assets {
+            let wavyte::Asset::Text(a) = asset else {
+                continue;
+            };
+
+            let prepared = assets
+                .get_or_load(asset)
+                .with_context(|| format!("load text asset '{key}'"))?;
+            let wavyte::PreparedAsset::Text(p) = prepared else {
+                anyhow::bail!("text asset '{key}' did not prepare as text (bug)");
+            };
+
+            let sha = sha256_hex(&p.font_bytes);
+            eprintln!("  {key}:");
+            eprintln!("    font_source: {}", a.font_source);
+            eprintln!("    family:      {}", p.font_family);
+            eprintln!("    sha256:      {}", sha);
+        }
+    }
+
+    if dump_svg {
+        eprintln!("svg font diagnostics:");
+        for (key, asset) in &comp.assets {
+            let wavyte::Asset::Svg(a) = asset else {
+                continue;
+            };
+
+            let prepared = assets
+                .get_or_load(asset)
+                .with_context(|| format!("load svg asset '{key}'"))?;
+            let wavyte::PreparedAsset::Svg(p) = prepared else {
+                anyhow::bail!("svg asset '{key}' did not prepare as svg (bug)");
+            };
+
+            let face_count = p.tree.fontdb().faces().count();
+            let text_nodes = count_svg_text_nodes(p.tree.root());
+            eprintln!("  {key}:");
+            eprintln!("    source:       {}", a.source);
+            eprintln!("    text_nodes:   {text_nodes}");
+            eprintln!("    font_faces:   {face_count}");
+        }
+    }
+
+    Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = sha2::Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+fn count_svg_text_nodes(group: &usvg::Group) -> usize {
+    let mut n = 0usize;
+    for child in group.children() {
+        match child {
+            usvg::Node::Group(g) => n += count_svg_text_nodes(g.as_ref()),
+            usvg::Node::Text(_) => n += 1,
+            usvg::Node::Path(_) | usvg::Node::Image(_) => {}
+        }
+    }
+    n
 }

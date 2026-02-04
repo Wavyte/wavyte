@@ -5,6 +5,8 @@ use std::{
 
 use anyhow::Context as _;
 use serde_json::json;
+use sha2::Digest as _;
+use wavyte::AssetCache as _;
 
 #[derive(Clone, Debug)]
 struct BenchArgs {
@@ -104,6 +106,8 @@ fn try_main() -> anyhow::Result<()> {
     };
     let comp = build_benchmark_comp(&params, &assets)?;
 
+    dump_font_diagnostics(&comp, &repo_root)?;
+
     let out_dir = if args.out_dir.is_absolute() {
         args.out_dir.clone()
     } else {
@@ -144,6 +148,51 @@ fn try_main() -> anyhow::Result<()> {
 
     report_percentiles(&runs);
     Ok(())
+}
+
+fn dump_font_diagnostics(comp: &wavyte::Composition, repo_root: &Path) -> anyhow::Result<()> {
+    let mut assets = wavyte::FsAssetCache::new(repo_root);
+
+    eprintln!("font diagnostics:");
+    for (key, asset) in &comp.assets {
+        match asset {
+            wavyte::Asset::Text(a) => {
+                let prepared = assets
+                    .get_or_load(asset)
+                    .with_context(|| format!("load text asset '{key}'"))?;
+                let wavyte::PreparedAsset::Text(p) = prepared else {
+                    anyhow::bail!("text asset '{key}' did not prepare as text (bug)");
+                };
+                eprintln!("  text:{key}:");
+                eprintln!("    font_source: {}", a.font_source);
+                eprintln!("    family:      {}", p.font_family);
+                eprintln!("    sha256:      {}", sha256_hex(&p.font_bytes));
+            }
+            wavyte::Asset::Svg(a) => {
+                let prepared = assets
+                    .get_or_load(asset)
+                    .with_context(|| format!("load svg asset '{key}'"))?;
+                let wavyte::PreparedAsset::Svg(p) = prepared else {
+                    anyhow::bail!("svg asset '{key}' did not prepare as svg (bug)");
+                };
+                eprintln!("  svg:{key}:");
+                eprintln!("    source:     {}", a.source);
+                eprintln!("    font_faces: {}", p.tree.fontdb().faces().count());
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = sha2::Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
 }
 
 fn parse_args() -> anyhow::Result<BenchArgs> {

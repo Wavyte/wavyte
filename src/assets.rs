@@ -44,6 +44,7 @@ pub struct TextBrushRgba8 {
 pub struct PreparedText {
     pub layout: Arc<parley::Layout<TextBrushRgba8>>,
     pub font_bytes: Arc<Vec<u8>>,
+    pub font_family: String,
 }
 
 impl std::fmt::Debug for PreparedText {
@@ -51,6 +52,7 @@ impl std::fmt::Debug for PreparedText {
         f.debug_struct("PreparedText")
             .field("layout_ptr", &Arc::as_ptr(&self.layout))
             .field("font_bytes_len", &self.font_bytes.len())
+            .field("font_family", &self.font_family)
             .finish()
     }
 }
@@ -200,6 +202,130 @@ impl FsAssetCache {
             .with_context(|| format!("read asset bytes from '{}'", path.display()))
             .map_err(WavyteError::from)
     }
+
+    fn parse_svg_with_options(&self, norm_path: &str, bytes: &[u8]) -> WavyteResult<PreparedSvg> {
+        let abs = self.root.join(Path::new(norm_path));
+        let resources_dir = abs.parent().map(|p| p.to_path_buf());
+
+        let fontdb = self.build_svg_fontdb(resources_dir.as_deref());
+        let font_resolver = make_svg_font_resolver();
+        let opts = usvg::Options {
+            resources_dir,
+            fontdb,
+            font_resolver,
+            ..Default::default()
+        };
+
+        // Font correctness uplift will supply an explicit fontdb (system + project fonts).
+        let tree = usvg::Tree::from_data(bytes, &opts).with_context(|| "parse svg tree")?;
+        Ok(PreparedSvg {
+            tree: Arc::new(tree),
+        })
+    }
+
+    fn build_svg_fontdb(
+        &self,
+        resources_dir: Option<&Path>,
+    ) -> std::sync::Arc<usvg::fontdb::Database> {
+        let mut db = usvg::fontdb::Database::new();
+
+        // System fonts ON (policy): best-effort; failures should not break rendering if project fonts exist.
+        db.load_system_fonts();
+
+        // Project fonts ON (policy): load fonts from `<root>/fonts` and `<root>/assets` (bounded, non-recursive).
+        self.load_fonts_from_dir(&mut db, &self.root.join("fonts"));
+        self.load_fonts_from_dir(&mut db, &self.root.join("assets"));
+
+        // Also scan the SVG's own directory and a `fonts/` subdir next to it (for compositions that bundle fonts
+        // alongside SVGs).
+        if let Some(dir) = resources_dir {
+            self.load_fonts_from_dir(&mut db, dir);
+            self.load_fonts_from_dir(&mut db, &dir.join("fonts"));
+        }
+
+        std::sync::Arc::new(db)
+    }
+
+    fn load_fonts_from_dir(&self, db: &mut usvg::fontdb::Database, dir: &Path) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let ext = ext.to_ascii_lowercase();
+            if ext != "ttf" && ext != "otf" && ext != "ttc" {
+                continue;
+            }
+
+            // Ignore individual font load failures; partial success is better than hard error.
+            let _ = db.load_font_file(&path);
+        }
+    }
+}
+
+fn make_svg_font_resolver() -> usvg::FontResolver<'static> {
+    use usvg::FontResolver;
+
+    FontResolver {
+        select_font: Box::new(|font, fontdb| {
+            let mut families = Vec::<usvg::fontdb::Family<'_>>::new();
+            for family in font.families() {
+                families.push(match family {
+                    usvg::FontFamily::Serif => usvg::fontdb::Family::Serif,
+                    usvg::FontFamily::SansSerif => usvg::fontdb::Family::SansSerif,
+                    usvg::FontFamily::Cursive => usvg::fontdb::Family::Cursive,
+                    usvg::FontFamily::Fantasy => usvg::fontdb::Family::Fantasy,
+                    usvg::FontFamily::Monospace => usvg::fontdb::Family::Monospace,
+                    usvg::FontFamily::Named(s) => usvg::fontdb::Family::Name(s),
+                });
+            }
+
+            // Be more permissive than `usvg` defaults: try sans-serif and serif fallbacks,
+            // and if that still fails, pick any available face rather than dropping the text node.
+            families.push(usvg::fontdb::Family::SansSerif);
+            families.push(usvg::fontdb::Family::Serif);
+            families.push(usvg::fontdb::Family::Monospace);
+
+            let stretch = match font.stretch() {
+                usvg::FontStretch::UltraCondensed => usvg::fontdb::Stretch::UltraCondensed,
+                usvg::FontStretch::ExtraCondensed => usvg::fontdb::Stretch::ExtraCondensed,
+                usvg::FontStretch::Condensed => usvg::fontdb::Stretch::Condensed,
+                usvg::FontStretch::SemiCondensed => usvg::fontdb::Stretch::SemiCondensed,
+                usvg::FontStretch::Normal => usvg::fontdb::Stretch::Normal,
+                usvg::FontStretch::SemiExpanded => usvg::fontdb::Stretch::SemiExpanded,
+                usvg::FontStretch::Expanded => usvg::fontdb::Stretch::Expanded,
+                usvg::FontStretch::ExtraExpanded => usvg::fontdb::Stretch::ExtraExpanded,
+                usvg::FontStretch::UltraExpanded => usvg::fontdb::Stretch::UltraExpanded,
+            };
+
+            let style = match font.style() {
+                usvg::FontStyle::Normal => usvg::fontdb::Style::Normal,
+                usvg::FontStyle::Italic => usvg::fontdb::Style::Italic,
+                usvg::FontStyle::Oblique => usvg::fontdb::Style::Oblique,
+            };
+
+            let query = usvg::fontdb::Query {
+                families: &families,
+                weight: usvg::fontdb::Weight(font.weight()),
+                stretch,
+                style,
+            };
+
+            if let Some(id) = fontdb.query(&query) {
+                return Some(id);
+            }
+
+            // Last-ditch fallback: any face at all (ensures `<text>` nodes are not silently dropped).
+            fontdb.faces().next().map(|f| f.id)
+        }),
+        select_fallback: FontResolver::default_fallback_selector(),
+    }
 }
 
 impl AssetCache for FsAssetCache {
@@ -228,7 +354,7 @@ impl AssetCache for FsAssetCache {
             }
             model::Asset::Svg(_) => {
                 let bytes = self.read_bytes(&key.norm_path)?;
-                PreparedAsset::Svg(assets_decode::parse_svg(&bytes)?)
+                PreparedAsset::Svg(self.parse_svg_with_options(&key.norm_path, &bytes)?)
             }
             model::Asset::Text(a) => {
                 let font_bytes = self.read_bytes(&key.norm_path)?;
@@ -245,9 +371,14 @@ impl AssetCache for FsAssetCache {
                     brush,
                     a.max_width_px,
                 )?;
+                let family = self
+                    .text_engine
+                    .last_family_name()
+                    .unwrap_or_else(|| "unknown".to_string());
                 PreparedAsset::Text(PreparedText {
                     layout: Arc::new(layout),
                     font_bytes: Arc::new(font_bytes),
+                    font_family: family,
                 })
             }
             model::Asset::Video(_) | model::Asset::Audio(_) | model::Asset::Path(_) => {
@@ -329,6 +460,7 @@ impl Fnv1a64 {
 pub struct TextLayoutEngine {
     font_ctx: parley::FontContext,
     layout_ctx: parley::LayoutContext<TextBrushRgba8>,
+    last_family_name: Option<String>,
 }
 
 impl Default for TextLayoutEngine {
@@ -342,7 +474,12 @@ impl TextLayoutEngine {
         Self {
             font_ctx: parley::FontContext::default(),
             layout_ctx: parley::LayoutContext::new(),
+            last_family_name: None,
         }
+    }
+
+    pub fn last_family_name(&self) -> Option<String> {
+        self.last_family_name.clone()
     }
 
     pub fn layout_plain(
@@ -373,6 +510,7 @@ impl TextLayoutEngine {
             .family_name(family_id)
             .ok_or_else(|| WavyteError::validation("registered font family has no name"))?
             .to_string();
+        self.last_family_name = Some(family_name.clone());
 
         let mut builder = self
             .layout_ctx

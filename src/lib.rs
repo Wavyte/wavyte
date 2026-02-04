@@ -40,6 +40,7 @@ mod model;
 mod pipeline;
 mod render;
 mod render_passes;
+mod svg_raster;
 mod transitions;
 
 mod blur_cpu;
