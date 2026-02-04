@@ -80,8 +80,9 @@ fn build_comp() -> Composition {
                 range: FrameRange::new(FrameIndex(0), duration).unwrap(),
                 props: ClipProps {
                     transform: Anim::constant(Transform2D {
-                        translate: Vec2::new(320.0, 160.0),
-                        scale: Vec2::new(2.0, 2.0),
+                        // Center a 512x512 SVG on a 1280x720 canvas.
+                        translate: Vec2::new(384.0, 104.0),
+                        scale: Vec2::new(1.0, 1.0),
                         ..Transform2D::default()
                     }),
                     opacity: fade,

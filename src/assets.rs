@@ -208,9 +208,11 @@ impl FsAssetCache {
         let resources_dir = abs.parent().map(|p| p.to_path_buf());
 
         let fontdb = self.build_svg_fontdb(resources_dir.as_deref());
+        let font_resolver = make_svg_font_resolver();
         let opts = usvg::Options {
             resources_dir,
             fontdb,
+            font_resolver,
             ..Default::default()
         };
 
@@ -264,6 +266,65 @@ impl FsAssetCache {
             // Ignore individual font load failures; partial success is better than hard error.
             let _ = db.load_font_file(&path);
         }
+    }
+}
+
+fn make_svg_font_resolver() -> usvg::FontResolver<'static> {
+    use usvg::FontResolver;
+
+    FontResolver {
+        select_font: Box::new(|font, fontdb| {
+            let mut families = Vec::<usvg::fontdb::Family<'_>>::new();
+            for family in font.families() {
+                families.push(match family {
+                    usvg::FontFamily::Serif => usvg::fontdb::Family::Serif,
+                    usvg::FontFamily::SansSerif => usvg::fontdb::Family::SansSerif,
+                    usvg::FontFamily::Cursive => usvg::fontdb::Family::Cursive,
+                    usvg::FontFamily::Fantasy => usvg::fontdb::Family::Fantasy,
+                    usvg::FontFamily::Monospace => usvg::fontdb::Family::Monospace,
+                    usvg::FontFamily::Named(s) => usvg::fontdb::Family::Name(s),
+                });
+            }
+
+            // Be more permissive than `usvg` defaults: try sans-serif and serif fallbacks,
+            // and if that still fails, pick any available face rather than dropping the text node.
+            families.push(usvg::fontdb::Family::SansSerif);
+            families.push(usvg::fontdb::Family::Serif);
+            families.push(usvg::fontdb::Family::Monospace);
+
+            let stretch = match font.stretch() {
+                usvg::FontStretch::UltraCondensed => usvg::fontdb::Stretch::UltraCondensed,
+                usvg::FontStretch::ExtraCondensed => usvg::fontdb::Stretch::ExtraCondensed,
+                usvg::FontStretch::Condensed => usvg::fontdb::Stretch::Condensed,
+                usvg::FontStretch::SemiCondensed => usvg::fontdb::Stretch::SemiCondensed,
+                usvg::FontStretch::Normal => usvg::fontdb::Stretch::Normal,
+                usvg::FontStretch::SemiExpanded => usvg::fontdb::Stretch::SemiExpanded,
+                usvg::FontStretch::Expanded => usvg::fontdb::Stretch::Expanded,
+                usvg::FontStretch::ExtraExpanded => usvg::fontdb::Stretch::ExtraExpanded,
+                usvg::FontStretch::UltraExpanded => usvg::fontdb::Stretch::UltraExpanded,
+            };
+
+            let style = match font.style() {
+                usvg::FontStyle::Normal => usvg::fontdb::Style::Normal,
+                usvg::FontStyle::Italic => usvg::fontdb::Style::Italic,
+                usvg::FontStyle::Oblique => usvg::fontdb::Style::Oblique,
+            };
+
+            let query = usvg::fontdb::Query {
+                families: &families,
+                weight: usvg::fontdb::Weight(font.weight()),
+                stretch,
+                style,
+            };
+
+            if let Some(id) = fontdb.query(&query) {
+                return Some(id);
+            }
+
+            // Last-ditch fallback: any face at all (ensures `<text>` nodes are not silently dropped).
+            fontdb.faces().next().map(|f| f.id)
+        }),
+        select_fallback: FontResolver::default_fallback_selector(),
     }
 }
 
