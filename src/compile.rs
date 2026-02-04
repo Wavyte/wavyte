@@ -5,7 +5,7 @@ use crate::{
     eval::EvaluatedGraph,
     fx::{PassFx, normalize_effects, parse_effect},
     model::{Asset, BlendMode, Composition, EffectInstance},
-    transitions::WipeDir,
+    transitions::{TransitionKind, WipeDir, parse_transition_kind_params},
 };
 
 #[derive(Clone, Debug)]
@@ -116,6 +116,13 @@ pub fn compile_frame(
     eval: &EvaluatedGraph,
     assets: &mut dyn AssetCache,
 ) -> WavyteResult<RenderPlan> {
+    #[derive(Clone, Debug)]
+    struct Layer {
+        surface: SurfaceId,
+        transition_in: Option<crate::eval::ResolvedTransition>,
+        transition_out: Option<crate::eval::ResolvedTransition>,
+    }
+
     let mut surfaces = Vec::<SurfaceDesc>::new();
     surfaces.push(SurfaceDesc {
         width: comp.canvas.width,
@@ -124,7 +131,7 @@ pub fn compile_frame(
     });
 
     let mut scene_passes = Vec::<Pass>::with_capacity(eval.nodes.len());
-    let mut composite_ops = Vec::<CompositeOp>::with_capacity(eval.nodes.len());
+    let mut layers = Vec::<Layer>::with_capacity(eval.nodes.len());
 
     for (idx, node) in eval.nodes.iter().enumerate() {
         let Some(asset) = comp.assets.get(&node.asset) else {
@@ -144,14 +151,9 @@ pub fn compile_frame(
         }
         let fx = normalize_effects(&parsed);
 
-        let mut opacity = (node.opacity as f32) * fx.inline.opacity_mul;
-        if let Some(tr) = &node.transition_in {
-            opacity *= tr.progress as f32;
-        }
-        if let Some(tr) = &node.transition_out {
-            opacity *= (1.0 - tr.progress) as f32;
-        }
-        opacity = opacity.clamp(0.0, 1.0);
+        // Transitions are handled during composition. Keep DrawOp opacity for "intrinsic" opacity
+        // only (clip opacity + inline opacity effect).
+        let opacity = ((node.opacity as f32) * fx.inline.opacity_mul).clamp(0.0, 1.0);
 
         if opacity <= 0.0 {
             continue;
@@ -238,10 +240,96 @@ pub fn compile_frame(
         }
 
         let _ = idx;
-        composite_ops.push(CompositeOp::Over {
-            src: post_fx,
-            opacity: 1.0,
+        layers.push(Layer {
+            surface: post_fx,
+            transition_in: node.transition_in.clone(),
+            transition_out: node.transition_out.clone(),
         });
+    }
+
+    let mut composite_ops = Vec::<CompositeOp>::with_capacity(layers.len());
+    let mut i = 0usize;
+    while i < layers.len() {
+        let layer = &layers[i];
+
+        let mut paired = false;
+        if i + 1 < layers.len() {
+            let next = &layers[i + 1];
+
+            if let (Some(out_tr), Some(in_tr)) =
+                (layer.transition_out.as_ref(), next.transition_in.as_ref())
+            {
+                let out_kind = parse_transition_kind_params(&out_tr.kind, &out_tr.params).ok();
+                let in_kind = parse_transition_kind_params(&in_tr.kind, &in_tr.params).ok();
+
+                if let (Some(out_kind), Some(in_kind)) = (out_kind, in_kind) {
+                    let t_in = (in_tr.progress as f32).clamp(0.0, 1.0);
+                    let t_out = (out_tr.progress as f32).clamp(0.0, 1.0);
+
+                    // Explicit v0.1 pairing rule: the Out and In edges must agree on progress
+                    // (same duration/ease and overlapping window).
+                    let progress_close = (t_in - t_out).abs() <= 0.05;
+
+                    if progress_close {
+                        match (out_kind, in_kind) {
+                            (TransitionKind::Crossfade, TransitionKind::Crossfade) => {
+                                composite_ops.push(CompositeOp::Crossfade {
+                                    a: layer.surface,
+                                    b: next.surface,
+                                    t: t_in,
+                                });
+                                paired = true;
+                            }
+                            (
+                                TransitionKind::Wipe {
+                                    dir: dir_a,
+                                    soft_edge: soft_a,
+                                },
+                                TransitionKind::Wipe {
+                                    dir: dir_b,
+                                    soft_edge: soft_b,
+                                },
+                            ) => {
+                                if dir_a == dir_b && (soft_a - soft_b).abs() <= 1e-6 {
+                                    composite_ops.push(CompositeOp::Wipe {
+                                        a: layer.surface,
+                                        b: next.surface,
+                                        t: t_in,
+                                        dir: dir_a,
+                                        soft_edge: soft_a,
+                                    });
+                                    paired = true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        if paired {
+            i += 2;
+            continue;
+        }
+
+        let mut layer_opacity = 1.0f32;
+        if let Some(tr) = &layer.transition_in {
+            layer_opacity *= tr.progress as f32;
+        }
+        if let Some(tr) = &layer.transition_out {
+            layer_opacity *= (1.0 - tr.progress) as f32;
+        }
+        layer_opacity = layer_opacity.clamp(0.0, 1.0);
+
+        if layer_opacity > 0.0 {
+            composite_ops.push(CompositeOp::Over {
+                src: layer.surface,
+                opacity: layer_opacity,
+            });
+        }
+
+        i += 1;
     }
 
     Ok(RenderPlan {
@@ -277,6 +365,7 @@ mod tests {
     use super::*;
     use crate::{
         anim::Anim,
+        anim_ease::Ease,
         core::{Fps, FrameIndex, FrameRange, Transform2D},
         eval::Evaluator,
         model::{
@@ -508,5 +597,267 @@ mod tests {
             }
             _ => panic!("expected Composite pass"),
         }
+    }
+
+    #[test]
+    fn compile_pairs_crossfade_into_single_composite_op() {
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "p0".to_string(),
+            Asset::Path(PathAsset {
+                svg_path_d: "M0,0 L10,0 L10,10 L0,10 Z".to_string(),
+            }),
+        );
+
+        let tr = TransitionSpec {
+            kind: "crossfade".to_string(),
+            duration_frames: 3,
+            ease: Ease::Linear,
+            params: serde_json::Value::Null,
+        };
+
+        let comp = Composition {
+            fps: Fps::new(30, 1).unwrap(),
+            canvas: Canvas {
+                width: 64,
+                height: 64,
+            },
+            duration: FrameIndex(20),
+            assets,
+            tracks: vec![Track {
+                name: "t".to_string(),
+                z_base: 0,
+                clips: vec![
+                    Clip {
+                        id: "a".to_string(),
+                        asset: "p0".to_string(),
+                        range: FrameRange::new(FrameIndex(0), FrameIndex(10)).unwrap(),
+                        props: ClipProps {
+                            transform: Anim::constant(Transform2D::default()),
+                            opacity: Anim::constant(1.0),
+                            blend: BlendMode::Normal,
+                        },
+                        z_offset: 0,
+                        effects: vec![],
+                        transition_in: None,
+                        transition_out: Some(tr.clone()),
+                    },
+                    Clip {
+                        id: "b".to_string(),
+                        asset: "p0".to_string(),
+                        range: FrameRange::new(FrameIndex(7), FrameIndex(17)).unwrap(),
+                        props: ClipProps {
+                            transform: Anim::constant(Transform2D::default()),
+                            opacity: Anim::constant(1.0),
+                            blend: BlendMode::Normal,
+                        },
+                        z_offset: 1,
+                        effects: vec![],
+                        transition_in: Some(tr),
+                        transition_out: None,
+                    },
+                ],
+            }],
+            seed: 1,
+        };
+
+        let eval = Evaluator::eval_frame(&comp, FrameIndex(8)).unwrap();
+        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let Pass::Composite(p) = plan.passes.last().unwrap() else {
+            panic!("expected Composite pass");
+        };
+        assert_eq!(p.ops.len(), 1);
+
+        match &p.ops[0] {
+            CompositeOp::Crossfade { a, b, t } => {
+                assert_eq!(*a, SurfaceId(1));
+                assert_eq!(*b, SurfaceId(2));
+                assert!((*t - 0.5).abs() <= 1e-6);
+            }
+            other => panic!("expected Crossfade op, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compile_pairs_wipe_into_single_composite_op() {
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "p0".to_string(),
+            Asset::Path(PathAsset {
+                svg_path_d: "M0,0 L10,0 L10,10 L0,10 Z".to_string(),
+            }),
+        );
+
+        let tr = TransitionSpec {
+            kind: "wipe".to_string(),
+            duration_frames: 3,
+            ease: Ease::Linear,
+            params: serde_json::json!({ "dir": "ttb", "soft_edge": 0.2 }),
+        };
+
+        let comp = Composition {
+            fps: Fps::new(30, 1).unwrap(),
+            canvas: Canvas {
+                width: 64,
+                height: 64,
+            },
+            duration: FrameIndex(20),
+            assets,
+            tracks: vec![Track {
+                name: "t".to_string(),
+                z_base: 0,
+                clips: vec![
+                    Clip {
+                        id: "a".to_string(),
+                        asset: "p0".to_string(),
+                        range: FrameRange::new(FrameIndex(0), FrameIndex(10)).unwrap(),
+                        props: ClipProps {
+                            transform: Anim::constant(Transform2D::default()),
+                            opacity: Anim::constant(1.0),
+                            blend: BlendMode::Normal,
+                        },
+                        z_offset: 0,
+                        effects: vec![],
+                        transition_in: None,
+                        transition_out: Some(tr.clone()),
+                    },
+                    Clip {
+                        id: "b".to_string(),
+                        asset: "p0".to_string(),
+                        range: FrameRange::new(FrameIndex(7), FrameIndex(17)).unwrap(),
+                        props: ClipProps {
+                            transform: Anim::constant(Transform2D::default()),
+                            opacity: Anim::constant(1.0),
+                            blend: BlendMode::Normal,
+                        },
+                        z_offset: 1,
+                        effects: vec![],
+                        transition_in: Some(tr),
+                        transition_out: None,
+                    },
+                ],
+            }],
+            seed: 1,
+        };
+
+        let eval = Evaluator::eval_frame(&comp, FrameIndex(8)).unwrap();
+        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let Pass::Composite(p) = plan.passes.last().unwrap() else {
+            panic!("expected Composite pass");
+        };
+        assert_eq!(p.ops.len(), 1);
+
+        match &p.ops[0] {
+            CompositeOp::Wipe {
+                a,
+                b,
+                t,
+                dir,
+                soft_edge,
+            } => {
+                assert_eq!(*a, SurfaceId(1));
+                assert_eq!(*b, SurfaceId(2));
+                assert!((*t - 0.5).abs() <= 1e-6);
+                assert_eq!(*dir, WipeDir::TopToBottom);
+                assert!((*soft_edge - 0.2).abs() <= 1e-6);
+            }
+            other => panic!("expected Wipe op, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compile_does_not_pair_transitions_when_progress_is_not_aligned() {
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "p0".to_string(),
+            Asset::Path(PathAsset {
+                svg_path_d: "M0,0 L10,0 L10,10 L0,10 Z".to_string(),
+            }),
+        );
+
+        let out_tr = TransitionSpec {
+            kind: "crossfade".to_string(),
+            duration_frames: 4,
+            ease: Ease::Linear,
+            params: serde_json::Value::Null,
+        };
+        let in_tr = TransitionSpec {
+            kind: "crossfade".to_string(),
+            duration_frames: 3,
+            ease: Ease::Linear,
+            params: serde_json::Value::Null,
+        };
+
+        let comp = Composition {
+            fps: Fps::new(30, 1).unwrap(),
+            canvas: Canvas {
+                width: 64,
+                height: 64,
+            },
+            duration: FrameIndex(20),
+            assets,
+            tracks: vec![Track {
+                name: "t".to_string(),
+                z_base: 0,
+                clips: vec![
+                    Clip {
+                        id: "a".to_string(),
+                        asset: "p0".to_string(),
+                        range: FrameRange::new(FrameIndex(0), FrameIndex(10)).unwrap(),
+                        props: ClipProps {
+                            transform: Anim::constant(Transform2D::default()),
+                            opacity: Anim::constant(1.0),
+                            blend: BlendMode::Normal,
+                        },
+                        z_offset: 0,
+                        effects: vec![],
+                        transition_in: None,
+                        transition_out: Some(out_tr),
+                    },
+                    Clip {
+                        id: "b".to_string(),
+                        asset: "p0".to_string(),
+                        range: FrameRange::new(FrameIndex(7), FrameIndex(17)).unwrap(),
+                        props: ClipProps {
+                            transform: Anim::constant(Transform2D::default()),
+                            opacity: Anim::constant(1.0),
+                            blend: BlendMode::Normal,
+                        },
+                        z_offset: 1,
+                        effects: vec![],
+                        transition_in: Some(in_tr),
+                        transition_out: None,
+                    },
+                ],
+            }],
+            seed: 1,
+        };
+
+        let eval = Evaluator::eval_frame(&comp, FrameIndex(8)).unwrap();
+        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let Pass::Composite(p) = plan.passes.last().unwrap() else {
+            panic!("expected Composite pass");
+        };
+        assert_eq!(p.ops.len(), 2);
+
+        let CompositeOp::Over {
+            src: src0,
+            opacity: op0,
+        } = p.ops[0]
+        else {
+            panic!("expected Over op 0");
+        };
+        let CompositeOp::Over {
+            src: src1,
+            opacity: op1,
+        } = p.ops[1]
+        else {
+            panic!("expected Over op 1");
+        };
+
+        assert_eq!(src0, SurfaceId(1));
+        assert_eq!(src1, SurfaceId(2));
+        assert!((op0 - (1.0 / 3.0)).abs() <= 0.02);
+        assert!((op1 - 0.5).abs() <= 1e-6);
     }
 }

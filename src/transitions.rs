@@ -17,8 +17,11 @@ pub enum TransitionKind {
     Wipe { dir: WipeDir, soft_edge: f32 },
 }
 
-pub fn parse_transition(spec: &TransitionSpec) -> WavyteResult<TransitionKind> {
-    let kind = spec.kind.trim().to_ascii_lowercase();
+pub fn parse_transition_kind_params(
+    kind: &str,
+    params: &serde_json::Value,
+) -> WavyteResult<TransitionKind> {
+    let kind = kind.trim().to_ascii_lowercase();
     if kind.is_empty() {
         return Err(WavyteError::validation("transition kind must be non-empty"));
     }
@@ -26,11 +29,11 @@ pub fn parse_transition(spec: &TransitionSpec) -> WavyteResult<TransitionKind> {
     match kind.as_str() {
         "crossfade" => Ok(TransitionKind::Crossfade),
         "wipe" => {
-            let params = if spec.params.is_null() {
+            let params = if params.is_null() {
                 None
             } else {
                 Some(
-                    spec.params
+                    params
                         .as_object()
                         .ok_or_else(|| WavyteError::validation("wipe params must be an object"))?,
                 )
@@ -73,6 +76,10 @@ pub fn parse_transition(spec: &TransitionSpec) -> WavyteResult<TransitionKind> {
             "unknown transition kind '{kind}'"
         ))),
     }
+}
+
+pub fn parse_transition(spec: &TransitionSpec) -> WavyteResult<TransitionKind> {
+    parse_transition_kind_params(&spec.kind, &spec.params)
 }
 
 #[cfg(test)]
