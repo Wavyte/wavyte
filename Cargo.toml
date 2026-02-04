@@ -8,6 +8,7 @@ default = ["cpu"]
 gpu = ["dep:vello", "dep:vello_svg", "dep:pollster", "dep:wgpu"]
 cpu = ["dep:vello_cpu", "dep:resvg"]
 hybrid = []
+ffmpeg = []
 cli = []
 napi = []
 

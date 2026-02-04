@@ -9,6 +9,8 @@ mod assets_decode;
 mod compile;
 mod core;
 mod dsl;
+#[cfg(feature = "ffmpeg")]
+mod encode_ffmpeg;
 mod error;
 mod eval;
 mod fx;
@@ -55,3 +57,6 @@ pub use pipeline::render_frame;
 pub use render::{BackendKind, FrameRGBA, RenderBackend, RenderSettings, create_backend};
 pub use render_passes::{PassBackend, execute_plan};
 pub use transitions::{TransitionKind, WipeDir, parse_transition};
+
+#[cfg(feature = "ffmpeg")]
+pub use encode_ffmpeg::{EncodeConfig, default_mp4_config, ensure_parent_dir, is_ffmpeg_on_path};
