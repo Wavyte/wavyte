@@ -149,7 +149,7 @@ impl VelloBackend {
 
         let params = device.create_buffer(&vello::wgpu::BufferDescriptor {
             label: Some("wavyte_composite_params"),
-            size: 16,
+            size: 32,
             usage: vello::wgpu::BufferUsages::UNIFORM | vello::wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -171,18 +171,28 @@ impl VelloBackend {
                     vello::wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: vello::wgpu::ShaderStages::FRAGMENT,
+                        ty: vello::wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: vello::wgpu::TextureViewDimension::D2,
+                            sample_type: vello::wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    vello::wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: vello::wgpu::ShaderStages::FRAGMENT,
                         ty: vello::wgpu::BindingType::Sampler(
                             vello::wgpu::SamplerBindingType::Filtering,
                         ),
                         count: None,
                     },
                     vello::wgpu::BindGroupLayoutEntry {
-                        binding: 2,
+                        binding: 3,
                         visibility: vello::wgpu::ShaderStages::FRAGMENT,
                         ty: vello::wgpu::BindingType::Buffer {
                             ty: vello::wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
-                            min_binding_size: Some(std::num::NonZeroU64::new(16).unwrap()),
+                            min_binding_size: Some(std::num::NonZeroU64::new(32).unwrap()),
                         },
                         count: None,
                     },
@@ -212,14 +222,54 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
   return o;
 }
 
-@group(0) @binding(0) var t_src: texture_2d<f32>;
-@group(0) @binding(1) var s_src: sampler;
-@group(0) @binding(2) var<uniform> params: vec4<f32>;
+@group(0) @binding(0) var t_a: texture_2d<f32>;
+@group(0) @binding(1) var t_b: texture_2d<f32>;
+@group(0) @binding(2) var s_src: sampler;
+@group(0) @binding(3) var<uniform> params: array<vec4<f32>, 2>;
+
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+  if (x <= a) { return 0.0; }
+  if (x >= b) { return 1.0; }
+  let t = (x - a) / (b - a);
+  return clamp(t * t * (3.0 - 2.0 * t), 0.0, 1.0);
+}
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
-  let c = textureSample(t_src, s_src, in.uv);
-  return c * params.x;
+  let p0 = params[0];
+  let p1 = params[1];
+
+  let opacity = clamp(p0.x, 0.0, 1.0);
+  let t = clamp(p0.y, 0.0, 1.0);
+  let soft = max(p0.z, 0.0);
+  let mode = u32(p0.w + 0.5); // 0=over, 1=crossfade, 2=wipe
+  let dir = u32(p1.x + 0.5); // 0=ltr, 1=rtl, 2=ttb, 3=btt
+
+  let a = textureSample(t_a, s_src, in.uv);
+  let b = textureSample(t_b, s_src, in.uv);
+
+  var out = a;
+  if (mode == 0u) {
+    out = a;
+  } else if (mode == 1u) {
+    out = a * (1.0 - t) + b * t;
+  } else {
+    var p = in.uv.x;
+    if (dir == 1u) { p = 1.0 - in.uv.x; }
+    if (dir == 2u) { p = in.uv.y; }
+    if (dir == 3u) { p = 1.0 - in.uv.y; }
+
+    let edge = t * (1.0 + 2.0 * soft) - soft;
+    let a_edge = edge - soft;
+    let b_edge = edge + soft;
+    let m = select(
+      select(0.0, 1.0, p < edge),
+      1.0 - smoothstep(a_edge, b_edge, p),
+      soft > 0.0
+    );
+    out = a * (1.0 - m) + b * m;
+  }
+  return out * opacity;
 }
 "#
                 .into(),
@@ -440,52 +490,84 @@ impl PassBackend for VelloBackend {
             rp.set_pipeline(&compositor.pipeline);
 
             for op in &pass.ops {
-                match *op {
+                let (a_id, b_id, opacity, t, soft_edge, mode, dir_idx): (
+                    SurfaceId,
+                    SurfaceId,
+                    f32,
+                    f32,
+                    f32,
+                    f32,
+                    f32,
+                ) = match *op {
                     CompositeOp::Over { src, opacity } => {
-                        let src = self.surfaces.get(&src).ok_or_else(|| {
-                            WavyteError::evaluation(format!(
-                                "composite src surface {:?} was not initialized",
-                                src
-                            ))
-                        })?;
-
-                        let opacity = opacity.clamp(0.0, 1.0);
-                        let mut params = [0u8; 16];
-                        params[0..4].copy_from_slice(&opacity.to_le_bytes());
-                        queue.write_buffer(&compositor.params, 0, &params);
-
-                        let bind_group =
-                            device.create_bind_group(&vello::wgpu::BindGroupDescriptor {
-                                label: Some("wavyte_composite_bg"),
-                                layout: &compositor.bind_group_layout,
-                                entries: &[
-                                    vello::wgpu::BindGroupEntry {
-                                        binding: 0,
-                                        resource: vello::wgpu::BindingResource::TextureView(
-                                            &src.view,
-                                        ),
-                                    },
-                                    vello::wgpu::BindGroupEntry {
-                                        binding: 1,
-                                        resource: vello::wgpu::BindingResource::Sampler(
-                                            &compositor.sampler,
-                                        ),
-                                    },
-                                    vello::wgpu::BindGroupEntry {
-                                        binding: 2,
-                                        resource: compositor.params.as_entire_binding(),
-                                    },
-                                ],
-                            });
-                        rp.set_bind_group(0, &bind_group, &[]);
-                        rp.draw(0..3, 0..1);
+                        (src, src, opacity, 0.0f32, 0.0f32, 0.0f32, 0.0f32)
                     }
-                    CompositeOp::Crossfade { .. } | CompositeOp::Wipe { .. } => {
-                        return Err(WavyteError::evaluation(
-                            "gpu composite crossfade/wipe is not implemented yet (phase 5)",
-                        ));
+                    CompositeOp::Crossfade { a, b, t } => (a, b, 1.0f32, t, 0.0f32, 1.0f32, 0.0f32),
+                    CompositeOp::Wipe {
+                        a,
+                        b,
+                        t,
+                        dir,
+                        soft_edge,
+                    } => {
+                        let dir_idx = match dir {
+                            crate::transitions::WipeDir::LeftToRight => 0.0f32,
+                            crate::transitions::WipeDir::RightToLeft => 1.0f32,
+                            crate::transitions::WipeDir::TopToBottom => 2.0f32,
+                            crate::transitions::WipeDir::BottomToTop => 3.0f32,
+                        };
+                        (a, b, 1.0f32, t, soft_edge, 2.0f32, dir_idx)
                     }
-                }
+                };
+
+                let a = self.surfaces.get(&a_id).ok_or_else(|| {
+                    WavyteError::evaluation(format!(
+                        "composite src surface {:?} was not initialized",
+                        a_id
+                    ))
+                })?;
+                let b = self.surfaces.get(&b_id).ok_or_else(|| {
+                    WavyteError::evaluation(format!(
+                        "composite src surface {:?} was not initialized",
+                        b_id
+                    ))
+                })?;
+
+                let opacity = opacity.clamp(0.0, 1.0);
+                let t = t.clamp(0.0, 1.0);
+                let soft_edge = soft_edge.clamp(0.0, 1.0);
+                let mut params = [0u8; 32];
+                params[0..4].copy_from_slice(&opacity.to_le_bytes());
+                params[4..8].copy_from_slice(&t.to_le_bytes());
+                params[8..12].copy_from_slice(&soft_edge.to_le_bytes());
+                params[12..16].copy_from_slice(&mode.to_le_bytes());
+                params[16..20].copy_from_slice(&dir_idx.to_le_bytes());
+                queue.write_buffer(&compositor.params, 0, &params);
+
+                let bind_group = device.create_bind_group(&vello::wgpu::BindGroupDescriptor {
+                    label: Some("wavyte_composite_bg"),
+                    layout: &compositor.bind_group_layout,
+                    entries: &[
+                        vello::wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: vello::wgpu::BindingResource::TextureView(&a.view),
+                        },
+                        vello::wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: vello::wgpu::BindingResource::TextureView(&b.view),
+                        },
+                        vello::wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: vello::wgpu::BindingResource::Sampler(&compositor.sampler),
+                        },
+                        vello::wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: compositor.params.as_entire_binding(),
+                        },
+                    ],
+                });
+                rp.set_bind_group(0, &bind_group, &[]);
+                rp.draw(0..3, 0..1);
             }
         }
 
