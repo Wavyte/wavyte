@@ -13,12 +13,14 @@ napi = []
 
 [dependencies]
 anyhow = "1"
+image = "0.25.9"
 kurbo = { version = "0.13", features = ["serde"] }
+parley = { version = "0.7.0", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tracing = { version = "0.1", features = ["attributes"] }
+usvg = { version = "0.46.0", default-features = false, features = ["text"] }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
-
