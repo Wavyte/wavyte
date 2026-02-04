@@ -200,6 +200,23 @@ impl FsAssetCache {
             .with_context(|| format!("read asset bytes from '{}'", path.display()))
             .map_err(WavyteError::from)
     }
+
+    fn parse_svg_with_options(&self, norm_path: &str, bytes: &[u8]) -> WavyteResult<PreparedSvg> {
+        let abs = self.root.join(Path::new(norm_path));
+        let resources_dir = abs.parent().map(|p| p.to_path_buf());
+
+        let opts = usvg::Options {
+            resources_dir,
+            ..Default::default()
+        };
+
+        // Font correctness uplift will supply an explicit fontdb (system + project fonts).
+        // For now, let `usvg` build its default database (feature-wired in Cargo.toml).
+        let tree = usvg::Tree::from_data(bytes, &opts).with_context(|| "parse svg tree")?;
+        Ok(PreparedSvg {
+            tree: Arc::new(tree),
+        })
+    }
 }
 
 impl AssetCache for FsAssetCache {
@@ -228,7 +245,7 @@ impl AssetCache for FsAssetCache {
             }
             model::Asset::Svg(_) => {
                 let bytes = self.read_bytes(&key.norm_path)?;
-                PreparedAsset::Svg(assets_decode::parse_svg(&bytes)?)
+                PreparedAsset::Svg(self.parse_svg_with_options(&key.norm_path, &bytes)?)
             }
             model::Asset::Text(a) => {
                 let font_bytes = self.read_bytes(&key.norm_path)?;
