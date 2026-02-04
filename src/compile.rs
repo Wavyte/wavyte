@@ -221,9 +221,25 @@ pub fn compile_frame(
             clear_to_transparent: true,
         }));
 
+        let mut post_fx = surf_id;
+        for fx in &fx.passes {
+            let out_id = SurfaceId((surfaces.len()) as u32);
+            surfaces.push(SurfaceDesc {
+                width: comp.canvas.width,
+                height: comp.canvas.height,
+                format: PixelFormat::Rgba8Premul,
+            });
+            scene_passes.push(Pass::Offscreen(OffscreenPass {
+                input: post_fx,
+                output: out_id,
+                fx: fx.clone(),
+            }));
+            post_fx = out_id;
+        }
+
         let _ = idx;
         composite_ops.push(CompositeOp::Over {
-            src: surf_id,
+            src: post_fx,
             opacity: 1.0,
         });
     }
@@ -408,5 +424,89 @@ mod tests {
         let coeffs = transform.as_coeffs();
         assert_eq!(coeffs[4], 3.0);
         assert_eq!(coeffs[5], 4.0);
+    }
+
+    #[test]
+    fn compile_emits_offscreen_blur_pass_and_composites_blurred_surface() {
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "p0".to_string(),
+            Asset::Path(PathAsset {
+                svg_path_d: "M0,0 L10,0 L10,10 L0,10 Z".to_string(),
+            }),
+        );
+
+        let comp = Composition {
+            fps: Fps::new(30, 1).unwrap(),
+            canvas: Canvas {
+                width: 64,
+                height: 64,
+            },
+            duration: FrameIndex(10),
+            assets,
+            tracks: vec![Track {
+                name: "t".to_string(),
+                z_base: 0,
+                clips: vec![Clip {
+                    id: "c0".to_string(),
+                    asset: "p0".to_string(),
+                    range: FrameRange::new(FrameIndex(0), FrameIndex(10)).unwrap(),
+                    props: ClipProps {
+                        transform: Anim::constant(Transform2D::default()),
+                        opacity: Anim::constant(1.0),
+                        blend: BlendMode::Normal,
+                    },
+                    z_offset: 0,
+                    effects: vec![EffectInstance {
+                        kind: "blur".to_string(),
+                        params: serde_json::json!({ "radius_px": 3, "sigma": 2.0 }),
+                    }],
+                    transition_in: None,
+                    transition_out: None,
+                }],
+            }],
+            seed: 1,
+        };
+
+        let eval = Evaluator::eval_frame(&comp, FrameIndex(0)).unwrap();
+        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+
+        assert_eq!(plan.surfaces.len(), 3);
+        assert_eq!(plan.final_surface, SurfaceId(0));
+
+        match &plan.passes[0] {
+            Pass::Scene(s) => assert_eq!(s.target, SurfaceId(1)),
+            _ => panic!("expected Scene pass"),
+        }
+
+        match &plan.passes[1] {
+            Pass::Offscreen(p) => {
+                assert_eq!(p.input, SurfaceId(1));
+                assert_eq!(p.output, SurfaceId(2));
+                assert_eq!(
+                    p.fx,
+                    crate::fx::PassFx::Blur {
+                        radius_px: 3,
+                        sigma: 2.0
+                    }
+                );
+            }
+            _ => panic!("expected Offscreen pass"),
+        }
+
+        match &plan.passes[2] {
+            Pass::Composite(p) => {
+                assert_eq!(p.target, SurfaceId(0));
+                assert_eq!(p.ops.len(), 1);
+                match p.ops[0] {
+                    CompositeOp::Over { src, opacity } => {
+                        assert_eq!(src, SurfaceId(2));
+                        assert_eq!(opacity, 1.0);
+                    }
+                    _ => panic!("expected Over composite op"),
+                }
+            }
+            _ => panic!("expected Composite pass"),
+        }
     }
 }
