@@ -221,6 +221,10 @@ mod tests {
             "t0".to_string(),
             Asset::Text(TextAsset {
                 text: "hello".to_string(),
+                font_source: "assets/PlayfairDisplay.ttf".to_string(),
+                size_px: 48.0,
+                max_width_px: None,
+                color_rgba8: [255, 255, 255, 255],
             }),
         );
         Composition {

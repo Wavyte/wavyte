@@ -3,7 +3,15 @@
   "canvas": { "width": 640, "height": 360 },
   "duration": 20,
   "assets": {
-    "t0": { "Text": { "text": "hello" } }
+    "t0": {
+      "Text": {
+        "text": "hello",
+        "font_source": "assets/PlayfairDisplay.ttf",
+        "size_px": 48.0,
+        "max_width_px": null,
+        "color_rgba8": [255, 255, 255, 255]
+      }
+    }
   },
   "tracks": [
     {
@@ -46,4 +54,3 @@
   ],
   "seed": 1
 }
-

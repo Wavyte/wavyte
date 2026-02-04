@@ -231,6 +231,10 @@ mod tests {
             "t0",
             Asset::Text(TextAsset {
                 text: "hello".to_string(),
+                font_source: "assets/PlayfairDisplay.ttf".to_string(),
+                size_px: 48.0,
+                max_width_px: None,
+                color_rgba8: [255, 255, 255, 255],
             }),
         )
         .unwrap()
@@ -252,11 +256,29 @@ mod tests {
             },
             FrameIndex(1),
         )
-        .asset("t0", Asset::Text(TextAsset { text: "a".into() }))
+        .asset(
+            "t0",
+            Asset::Text(TextAsset {
+                text: "a".into(),
+                font_source: "assets/PlayfairDisplay.ttf".to_string(),
+                size_px: 48.0,
+                max_width_px: None,
+                color_rgba8: [255, 255, 255, 255],
+            }),
+        )
         .unwrap();
         assert!(
             builder
-                .asset("t0", Asset::Text(TextAsset { text: "b".into() }))
+                .asset(
+                    "t0",
+                    Asset::Text(TextAsset {
+                        text: "b".into(),
+                        font_source: "assets/PlayfairDisplay.ttf".to_string(),
+                        size_px: 48.0,
+                        max_width_px: None,
+                        color_rgba8: [255, 255, 255, 255],
+                    }),
+                )
                 .is_err()
         );
     }

@@ -61,6 +61,16 @@ pub enum Asset {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TextAsset {
     pub text: String,
+    pub font_source: String,
+    pub size_px: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_width_px: Option<f32>,
+    #[serde(default = "default_text_color_rgba8")]
+    pub color_rgba8: [u8; 4],
+}
+
+fn default_text_color_rgba8() -> [u8; 4] {
+    [255, 255, 255, 255]
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -147,8 +157,67 @@ impl Composition {
             }
         }
 
+        for (key, asset) in &self.assets {
+            if key.trim().is_empty() {
+                return Err(WavyteError::validation("asset key must be non-empty"));
+            }
+            match asset {
+                Asset::Text(a) => {
+                    if a.text.trim().is_empty() {
+                        return Err(WavyteError::validation("text asset text must be non-empty"));
+                    }
+                    validate_rel_source(&a.font_source, "text asset font_source")?;
+                    if !a.size_px.is_finite() || a.size_px <= 0.0 {
+                        return Err(WavyteError::validation(
+                            "text asset size_px must be finite and > 0",
+                        ));
+                    }
+                    if let Some(w) = a.max_width_px
+                        && (!w.is_finite() || w <= 0.0)
+                    {
+                        return Err(WavyteError::validation(
+                            "text asset max_width_px must be finite and > 0 when set",
+                        ));
+                    }
+                }
+                Asset::Svg(a) => validate_rel_source(&a.source, "svg asset source")?,
+                Asset::Image(a) => validate_rel_source(&a.source, "image asset source")?,
+                Asset::Video(a) => validate_rel_source(&a.source, "video asset source")?,
+                Asset::Audio(a) => validate_rel_source(&a.source, "audio asset source")?,
+                Asset::Path(a) => {
+                    if a.svg_path_d.trim().is_empty() {
+                        return Err(WavyteError::validation(
+                            "path asset svg_path_d must be non-empty",
+                        ));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
+}
+
+fn validate_rel_source(source: &str, field: &str) -> WavyteResult<()> {
+    if source.trim().is_empty() {
+        return Err(WavyteError::validation(format!(
+            "{field} must be non-empty"
+        )));
+    }
+    let s = source.replace('\\', "/");
+    if s.starts_with('/') {
+        return Err(WavyteError::validation(format!(
+            "{field} must be a relative path"
+        )));
+    }
+    for part in s.split('/') {
+        if part == ".." {
+            return Err(WavyteError::validation(format!(
+                "{field} must not contain '..'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl TransitionSpec {
@@ -176,6 +245,10 @@ mod tests {
             "t0".to_string(),
             Asset::Text(TextAsset {
                 text: "hello".to_string(),
+                font_source: "assets/PlayfairDisplay.ttf".to_string(),
+                size_px: 48.0,
+                max_width_px: None,
+                color_rgba8: [255, 255, 255, 255],
             }),
         );
         Composition {
