@@ -1,7 +1,6 @@
 use wavyte::{
-    Anim, Canvas, Fps, FrameIndex, FrameRange, Transform2D, Vec2,
-    dsl::{ClipBuilder, CompositionBuilder, TrackBuilder},
-    model::{Asset, TextAsset},
+    Anim, Asset, Canvas, ClipBuilder, CompositionBuilder, Fps, FrameIndex, FrameRange, TextAsset,
+    TrackBuilder, Transform2D, Vec2,
 };
 
 fn main() -> anyhow::Result<()> {

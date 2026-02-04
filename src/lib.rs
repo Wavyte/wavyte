@@ -1,16 +1,23 @@
 #![forbid(unsafe_code)]
 
-pub mod anim;
-pub mod anim_ease;
-pub mod anim_ops;
-pub mod anim_proc;
-pub mod core;
-pub mod dsl;
-pub mod error;
-pub mod eval;
-pub mod model;
+mod anim;
+mod anim_ease;
+mod anim_ops;
+mod anim_proc;
+mod core;
+mod dsl;
+mod error;
+mod eval;
+mod model;
 
-pub use anim::Anim;
+pub use anim::{Anim, InterpMode, Keyframe, Keyframes, LoopMode, SampleCtx};
 pub use anim_ease::Ease;
+pub use anim_ops::{delay, loop_, mix, reverse, sequence, speed, stagger};
 pub use core::{Canvas, Fps, FrameIndex, FrameRange, Rgba8Premul, Transform2D, Vec2};
+pub use dsl::{ClipBuilder, CompositionBuilder, TrackBuilder};
 pub use error::{WavyteError, WavyteResult};
+pub use eval::{EvaluatedClipNode, EvaluatedGraph, Evaluator, ResolvedEffect, ResolvedTransition};
+pub use model::{
+    Asset, AudioAsset, BlendMode, Clip, ClipProps, Composition, EffectInstance, ImageAsset,
+    PathAsset, SvgAsset, TextAsset, Track, TransitionSpec, VideoAsset,
+};

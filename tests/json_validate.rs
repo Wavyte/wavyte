@@ -1,4 +1,4 @@
-use wavyte::model::Composition;
+use wavyte::Composition;
 
 #[test]
 fn json_fixture_validates() {

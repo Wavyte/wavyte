@@ -1,4 +1,4 @@
-use wavyte::{FrameIndex, eval::Evaluator, model::Composition};
+use wavyte::{Composition, Evaluator, FrameIndex};
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();

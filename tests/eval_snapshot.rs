@@ -1,4 +1,4 @@
-use wavyte::{FrameIndex, eval::Evaluator, model::Composition};
+use wavyte::{Composition, Evaluator, FrameIndex};
 
 fn mix64(mut z: u64) -> u64 {
     // SplitMix64 mixing function.
