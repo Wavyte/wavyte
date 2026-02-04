@@ -202,8 +202,9 @@
 //!   - the `transform` maps pixel space into canvas space
 //! - `Svg`:
 //!   - the asset is a `usvg::Tree` (vector)
-//!   - GPU: converted via `vello_svg` and rendered as vector geometry
-//!   - CPU: rasterized via `resvg` into a pixmap, then drawn as an image
+//!   - v0.1.0: rasterized via `resvg` into a pixmap (premultiplied RGBA8), then drawn as an image
+//!   - note: we intentionally use the same rasterization path on CPU and GPU to ensure SVG `<text>`
+//!     correctness; a future version can add an optional vector SVG pipeline.
 //! - `Text`:
 //!   - the asset is a prepared Parley layout
 //!   - glyph positioning originates in the Parley layout coordinate space; the op `transform`
@@ -251,7 +252,7 @@
 //! GPU backend (optional, requires `--features gpu`):
 //!
 //! - powered by `vello` and `wgpu`
-//! - SVG is supported by converting `usvg::Tree` via `vello_svg`
+//! - SVG is supported by rasterizing `usvg::Tree` via `resvg` and drawing the resulting image
 //! - final output is read back to CPU memory as RGBA8
 //!
 //! The default backend is CPU; requesting GPU without enabling the feature returns an error.

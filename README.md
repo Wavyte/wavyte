@@ -159,6 +159,9 @@ Implementation details (useful for debugging):
 - The CLI validates the composition before rendering.
 - The CLI uses `FsAssetCache` rooted at the directory containing the `--in` JSON file, so relative
   asset paths resolve relative to the composition file.
+- Debug font resolution:
+  - `--dump-fonts` prints resolved text font family + SHA-256 of the font bytes.
+  - `--dump-svg-fonts` prints SVG text node count + SVG fontdb face count (system + project fonts).
 
 ---
 
@@ -218,7 +221,10 @@ GPU rendering uses:
 
 - `vello` for scene building and rendering
 - `wgpu` for device/queue/surface management and readback to RGBA8
-- `vello_svg` to convert `usvg::Tree` into a `vello` scene segment
+- SVG: `usvg` parse + `resvg` rasterize (premultiplied RGBA8), then draw as an image
+
+Note: v0.1.0 prioritizes SVG correctness (including SVG `<text>`) over GPU-native vector SVG. A
+future version can add an optional vector SVG pipeline once it can render text reliably.
 
 If you request `BackendKind::Gpu` without building with `--features gpu`,
 backend creation fails with a clear error.
