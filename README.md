@@ -2,18 +2,21 @@
 
 Fast and ergonomic programmatic video generation (Rust).
 
-This repository is currently implementing **Wavyte v0.1.0**. As of **end of Phase 4**, the crate can:
+This repository is currently implementing **Wavyte v0.1.0**. As of **end of Phase 6**, the crate can:
 
 - Build a `Composition` (JSON or DSL)
 - Evaluate a frame into an ordered list of visible clip nodes
 - Compile that into a backend-agnostic `RenderPlan`
+- Render passes (multi-surface) with:
+  - CPU and GPU compositing (`Over`, `Crossfade`, `Wipe`)
+  - Blur as an offscreen pass (CPU + GPU)
 - Render a single frame into **premultiplied RGBA8** pixels via:
-  - **CPU backend** (default, no feature flag required): `vello_cpu` + (for SVG) `resvg`
+  - **CPU backend** (default): `vello_cpu` + (for SVG) `resvg`
   - **GPU backend** (opt-in): `vello` + `wgpu`, with readback to RGBA8
+- Encode MP4 videos by invoking the system `ffmpeg` binary (must be installed and on `PATH`)
+- A small CLI (`wavyte`) for `frame` and `render`
 
-The rest of v0.1 (Phases 5–6) will build on this foundation (passes, effects, transitions, and then encoding/output).
-
-## Status: end of Phase 4
+## Status: end of Phase 6
 
 ### What’s implemented
 
@@ -29,7 +32,7 @@ The rest of v0.1 (Phases 5–6) will build on this foundation (passes, effects, 
   - resolved transform (as `kurbo::Affine`)
   - resolved opacity (clamped)
   - resolved blend mode (currently only `Normal`)
-  - resolved transitions (Phase 4: used only to scale opacity)
+  - resolved transitions (typed + params)
 
 **Asset system (no renderer IO)**
 
@@ -45,8 +48,11 @@ The rest of v0.1 (Phases 5–6) will build on this foundation (passes, effects, 
 **Compilation**
 
 - `compile_frame(&Composition, &EvaluatedGraph, &mut dyn AssetCache) -> RenderPlan` (`src/compile.rs`)
-- `RenderPlan` is a per-frame list of passes (Phase 4: single `ScenePass`)
-- Draw ops supported in Phase 4:
+- `RenderPlan` is a per-frame list of passes over multiple surfaces:
+  - `Pass::Scene` (draw clip content into a surface)
+  - `Pass::Offscreen` (effects like blur into a new surface)
+  - `Pass::Composite` (layer surfaces into the final)
+- Draw ops supported in v0.1.0:
   - `FillPath` (from `PathAsset` SVG path `d`)
   - `Image` (by `AssetId`)
   - `Svg` (by `AssetId`)
@@ -57,6 +63,10 @@ The rest of v0.1 (Phases 5–6) will build on this foundation (passes, effects, 
 - Unified interface: `RenderBackend::render_plan(&RenderPlan, &mut dyn AssetCache) -> FrameRGBA` (`src/render.rs`)
 - `FrameRGBA` is `Vec<u8>` RGBA8, **premultiplied**
 - Orchestration: `render_frame(&Composition, FrameIndex, backend, assets)` (`src/pipeline.rs`)
+- MP4 output:
+  - `render_to_mp4(&Composition, out_path, opts, backend, assets)` (`src/pipeline.rs`)
+  - Uses `FfmpegEncoder` (`src/encode_ffmpeg.rs`) which spawns `ffmpeg` and streams raw RGBA frames to stdin.
+    If `ffmpeg` is not available, this returns an error.
 
 ## Design principles (important for Phases 5–6)
 
@@ -75,16 +85,17 @@ The rest of v0.1 (Phases 5–6) will build on this foundation (passes, effects, 
 
 Wavyte uses Cargo features to keep GPU dependencies optional while still working out-of-box.
 
-- `default` = `["cpu"]`
+- `default` = `["cpu", "cli"]`
   - CPU renderer is available by default (`BackendKind::Cpu`).
+  - The `wavyte` CLI binary is built by default.
 - `gpu`
   - Enables `BackendKind::Gpu` using `vello` + `wgpu` with offscreen render + readback.
   - Note: when `wgpu` is built with `default-features = false`, you must enable at least one backend
     (DX12/Metal/Vulkan/GLES). This crate’s `gpu` feature wires those on Linux/Windows/macOS.
 - `cpu`
   - Enables the CPU backend and CPU SVG rendering via `resvg`.
-- `hybrid`
-  - Reserved for a future combined backend (currently not implemented).
+- `cli`
+  - Enables the `wavyte` CLI binary (included in `default`).
 
 ## Backends
 
@@ -203,11 +214,14 @@ These rules are enforced during `Composition::validate()` and when constructing 
 
 - `cargo run --example build_dsl_and_dump_json`
 - `cargo run --example eval_frames`
-- Render to PNG (writes `target/render_one_frame.png`):
+- Render to PNG (writes into untracked `assets/`):
+  - Crossfade: `cargo run --example render_crossfade_png`
+  - Blur: `cargo run --example render_blur_png`
+- Render to MP4 (writes into untracked `assets/`, requires `ffmpeg` on `PATH`):
+  - `cargo run --example render_to_mp4`
+- Render one frame (writes `target/render_one_frame.png`):
   - CPU (default): `cargo run --example render_one_frame`
   - GPU: `cargo run --example render_one_frame --features gpu -- gpu`
-- CPU vs GPU parity (prints RMSE; skips if no adapter):
-  - `cargo run --example render_parity --features gpu,cpu`
 
 The `assets/` directory is intentionally untracked; examples discover assets at runtime and will
 gracefully omit image/text/svg layers if files are missing.
@@ -225,17 +239,17 @@ Run the full quality gate (required before commits in this repo):
 
 Notes:
 
-- The CPU renderer tests are `#[cfg(feature="cpu")]`, so with `default = ["cpu"]` they run under `cargo test`.
+- The CPU renderer tests are `#[cfg(feature="cpu")]`, so with `default = ["cpu","cli"]` they run under `cargo test`.
   Under `--no-default-features`, those tests compile out and you’ll see “0 tests” for those targets.
 - GPU tests skip if the environment has no adapter (they treat `"no gpu adapter available"` as a skip).
 
-## Known limitations (Phase 4)
+## Known limitations (v0.1.0)
 
 - Only `BlendMode::Normal` is implemented.
 - Only path fill is implemented (no stroke yet).
-- Video/audio assets exist in the model but are not renderable yet (Phase 6).
-- `ScenePass.clear` exists in the IR but is not yet used; clearing is controlled via `RenderSettings.clear_rgba`.
-- CPU SVG is rasterized; it is not a vector path conversion (yet).
+- Video/audio assets exist in the model but are not renderable yet (future).
+- CPU SVG is rasterized (via `resvg`); it is not a vector path conversion.
+- MP4 output requires `ffmpeg` to be installed and on `PATH`.
 
 ## Where Phase 5–6 work will land
 
