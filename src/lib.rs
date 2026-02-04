@@ -19,6 +19,8 @@ mod render_passes;
 mod transitions;
 
 #[cfg(feature = "cpu")]
+mod composite_cpu;
+#[cfg(feature = "cpu")]
 mod render_cpu;
 #[cfg(feature = "gpu")]
 mod render_vello;

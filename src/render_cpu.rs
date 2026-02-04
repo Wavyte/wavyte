@@ -124,11 +124,35 @@ impl PassBackend for CpuBackend {
                             src
                         ))
                     })?;
-                    composite_over_in_place(&mut dst.pixmap, &src.pixmap, opacity)?;
+                    crate::composite_cpu::over_in_place(
+                        dst.pixmap.data_as_u8_slice_mut(),
+                        src.pixmap.data_as_u8_slice(),
+                        opacity,
+                    )?;
                 }
-                CompositeOp::Crossfade { .. } | CompositeOp::Wipe { .. } => {
+                CompositeOp::Crossfade { a, b, t } => {
+                    let a = self.surfaces.get(&a).ok_or_else(|| {
+                        WavyteError::evaluation(format!(
+                            "composite src surface {:?} was not initialized",
+                            a
+                        ))
+                    })?;
+                    let b = self.surfaces.get(&b).ok_or_else(|| {
+                        WavyteError::evaluation(format!(
+                            "composite src surface {:?} was not initialized",
+                            b
+                        ))
+                    })?;
+                    crate::composite_cpu::crossfade_over_in_place(
+                        dst.pixmap.data_as_u8_slice_mut(),
+                        a.pixmap.data_as_u8_slice(),
+                        b.pixmap.data_as_u8_slice(),
+                        t,
+                    )?;
+                }
+                CompositeOp::Wipe { .. } => {
                     return Err(WavyteError::evaluation(
-                        "cpu composite crossfade/wipe is not implemented yet (phase 5)",
+                        "cpu composite wipe is not implemented yet (phase 5)",
                     ));
                 }
             }
@@ -172,47 +196,6 @@ fn clear_pixmap(pixmap: &mut vello_cpu::Pixmap, rgba: [u8; 4]) {
     for px in data.chunks_exact_mut(4) {
         px.copy_from_slice(&rgba);
     }
-}
-
-fn composite_over_in_place(
-    dst: &mut vello_cpu::Pixmap,
-    src: &vello_cpu::Pixmap,
-    opacity: f32,
-) -> WavyteResult<()> {
-    let opacity = opacity.clamp(0.0, 1.0);
-    if opacity <= 0.0 {
-        return Ok(());
-    }
-
-    let dst_bytes = dst.data_as_u8_slice_mut();
-    let src_bytes = src.data_as_u8_slice();
-    if dst_bytes.len() != src_bytes.len() {
-        return Err(WavyteError::evaluation(
-            "composite surface byte length mismatch",
-        ));
-    }
-
-    for (d, s) in dst_bytes.chunks_exact_mut(4).zip(src_bytes.chunks_exact(4)) {
-        let sa = (s[3] as f32) / 255.0;
-        let sa = (sa * opacity).clamp(0.0, 1.0);
-        if sa <= 0.0 {
-            continue;
-        }
-
-        let da = (d[3] as f32) / 255.0;
-        let out_a = sa + da * (1.0 - sa);
-        let inv = 1.0 - sa;
-
-        for i in 0..3 {
-            let sc = (s[i] as f32) * opacity;
-            let dc = d[i] as f32;
-            let out = sc + dc * inv;
-            d[i] = out.round().clamp(0.0, 255.0) as u8;
-        }
-        d[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
-    }
-
-    Ok(())
 }
 
 fn draw_op(
