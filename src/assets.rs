@@ -44,6 +44,7 @@ pub struct TextBrushRgba8 {
 pub struct PreparedText {
     pub layout: Arc<parley::Layout<TextBrushRgba8>>,
     pub font_bytes: Arc<Vec<u8>>,
+    pub font_family: String,
 }
 
 impl std::fmt::Debug for PreparedText {
@@ -51,6 +52,7 @@ impl std::fmt::Debug for PreparedText {
         f.debug_struct("PreparedText")
             .field("layout_ptr", &Arc::as_ptr(&self.layout))
             .field("font_bytes_len", &self.font_bytes.len())
+            .field("font_family", &self.font_family)
             .finish()
     }
 }
@@ -308,9 +310,14 @@ impl AssetCache for FsAssetCache {
                     brush,
                     a.max_width_px,
                 )?;
+                let family = self
+                    .text_engine
+                    .last_family_name()
+                    .unwrap_or_else(|| "unknown".to_string());
                 PreparedAsset::Text(PreparedText {
                     layout: Arc::new(layout),
                     font_bytes: Arc::new(font_bytes),
+                    font_family: family,
                 })
             }
             model::Asset::Video(_) | model::Asset::Audio(_) | model::Asset::Path(_) => {
@@ -392,6 +399,7 @@ impl Fnv1a64 {
 pub struct TextLayoutEngine {
     font_ctx: parley::FontContext,
     layout_ctx: parley::LayoutContext<TextBrushRgba8>,
+    last_family_name: Option<String>,
 }
 
 impl Default for TextLayoutEngine {
@@ -405,7 +413,12 @@ impl TextLayoutEngine {
         Self {
             font_ctx: parley::FontContext::default(),
             layout_ctx: parley::LayoutContext::new(),
+            last_family_name: None,
         }
+    }
+
+    pub fn last_family_name(&self) -> Option<String> {
+        self.last_family_name.clone()
     }
 
     pub fn layout_plain(
@@ -436,6 +449,7 @@ impl TextLayoutEngine {
             .family_name(family_id)
             .ok_or_else(|| WavyteError::validation("registered font family has no name"))?
             .to_string();
+        self.last_family_name = Some(family_name.clone());
 
         let mut builder = self
             .layout_ctx
