@@ -150,10 +150,37 @@ impl PassBackend for CpuBackend {
                         t,
                     )?;
                 }
-                CompositeOp::Wipe { .. } => {
-                    return Err(WavyteError::evaluation(
-                        "cpu composite wipe is not implemented yet (phase 5)",
-                    ));
+                CompositeOp::Wipe {
+                    a,
+                    b,
+                    t,
+                    dir,
+                    soft_edge,
+                } => {
+                    let a = self.surfaces.get(&a).ok_or_else(|| {
+                        WavyteError::evaluation(format!(
+                            "composite src surface {:?} was not initialized",
+                            a
+                        ))
+                    })?;
+                    let b = self.surfaces.get(&b).ok_or_else(|| {
+                        WavyteError::evaluation(format!(
+                            "composite src surface {:?} was not initialized",
+                            b
+                        ))
+                    })?;
+                    crate::composite_cpu::wipe_over_in_place(
+                        dst.pixmap.data_as_u8_slice_mut(),
+                        a.pixmap.data_as_u8_slice(),
+                        b.pixmap.data_as_u8_slice(),
+                        crate::composite_cpu::WipeParams {
+                            width: u32::from(dst.width),
+                            height: u32::from(dst.height),
+                            t,
+                            dir,
+                            soft_edge,
+                        },
+                    )?;
                 }
             }
         }

@@ -1,4 +1,5 @@
 use crate::error::WavyteResult;
+use crate::transitions::WipeDir;
 
 pub type PremulRgba8 = [u8; 4];
 
@@ -72,12 +73,97 @@ pub fn crossfade_over_in_place(dst: &mut [u8], a: &[u8], b: &[u8], t: f32) -> Wa
     Ok(())
 }
 
+pub fn wipe_over_in_place(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    params: WipeParams,
+) -> WavyteResult<()> {
+    let WipeParams {
+        width,
+        height,
+        t,
+        dir,
+        soft_edge,
+    } = params;
+    let expected_len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(4))
+        .ok_or_else(|| crate::WavyteError::evaluation("wipe buffer size overflow"))?;
+
+    if dst.len() != expected_len || a.len() != expected_len || b.len() != expected_len {
+        return Err(crate::WavyteError::evaluation(
+            "wipe_over_in_place expects buffers matching width*height*4",
+        ));
+    }
+
+    let t = t.clamp(0.0, 1.0);
+    let soft_edge = soft_edge.max(0.0);
+
+    let axis_len = match dir {
+        WipeDir::LeftToRight | WipeDir::RightToLeft => width as f32,
+        WipeDir::TopToBottom | WipeDir::BottomToTop => height as f32,
+    };
+    let soft_px = soft_edge * axis_len;
+
+    let edge = t * (axis_len + 2.0 * soft_px) - soft_px;
+    let a_edge = edge - soft_px;
+    let b_edge = edge + soft_px;
+
+    for y in 0..height {
+        for x in 0..width {
+            let pos = match dir {
+                WipeDir::LeftToRight => x as f32,
+                WipeDir::RightToLeft => (width - 1 - x) as f32,
+                WipeDir::TopToBottom => y as f32,
+                WipeDir::BottomToTop => (height - 1 - y) as f32,
+            };
+
+            let m = if soft_px <= 0.0 {
+                if pos < edge { 1.0 } else { 0.0 }
+            } else {
+                1.0 - smoothstep(a_edge, b_edge, pos)
+            };
+
+            let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
+            let dp = [dst[idx], dst[idx + 1], dst[idx + 2], dst[idx + 3]];
+            let ap = [a[idx], a[idx + 1], a[idx + 2], a[idx + 3]];
+            let bp = [b[idx], b[idx + 1], b[idx + 2], b[idx + 3]];
+            let blended = crossfade(ap, bp, m);
+            let out = over(dp, blended, 1.0);
+            dst[idx..idx + 4].copy_from_slice(&out);
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WipeParams {
+    pub width: u32,
+    pub height: u32,
+    pub t: f32,
+    pub dir: WipeDir,
+    pub soft_edge: f32,
+}
+
 fn mul_div255(x: u16, y: u16) -> u8 {
     (((u32::from(x) * u32::from(y)) + 127) / 255) as u8
 }
 
 fn add_sat_u8(a: u8, b: u8) -> u8 {
     a.saturating_add(b)
+}
+
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    if x <= a {
+        return 0.0;
+    }
+    if x >= b {
+        return 1.0;
+    }
+    let t = (x - a) / (b - a);
+    (t * t * (3.0 - 2.0 * t)).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -118,5 +204,131 @@ mod tests {
         let b = [200, 210, 220, 230];
         assert_eq!(crossfade(a, b, 0.0), a);
         assert_eq!(crossfade(a, b, 1.0), b);
+    }
+
+    #[test]
+    fn wipe_ltr_endpoints_match_a_and_b() {
+        let (w, h) = (4u32, 1u32);
+        let a_px = [255u8, 0u8, 0u8, 255u8];
+        let b_px = [0u8, 0u8, 255u8, 255u8];
+
+        let a = a_px.repeat((w * h) as usize);
+        let b = b_px.repeat((w * h) as usize);
+        let mut dst = vec![0u8; (w * h * 4) as usize];
+
+        wipe_over_in_place(
+            &mut dst,
+            &a,
+            &b,
+            WipeParams {
+                width: w,
+                height: h,
+                t: 0.0,
+                dir: WipeDir::LeftToRight,
+                soft_edge: 0.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(dst, a);
+
+        dst.fill(0);
+        wipe_over_in_place(
+            &mut dst,
+            &a,
+            &b,
+            WipeParams {
+                width: w,
+                height: h,
+                t: 1.0,
+                dir: WipeDir::LeftToRight,
+                soft_edge: 0.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(dst, b);
+    }
+
+    #[test]
+    fn wipe_ltr_midpoint_splits_image() {
+        let (w, h) = (4u32, 1u32);
+        let a_px = [255u8, 0u8, 0u8, 255u8];
+        let b_px = [0u8, 0u8, 255u8, 255u8];
+
+        let a = a_px.repeat((w * h) as usize);
+        let b = b_px.repeat((w * h) as usize);
+        let mut dst = vec![0u8; (w * h * 4) as usize];
+
+        wipe_over_in_place(
+            &mut dst,
+            &a,
+            &b,
+            WipeParams {
+                width: w,
+                height: h,
+                t: 0.5,
+                dir: WipeDir::LeftToRight,
+                soft_edge: 0.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(&dst[0..8], &b[0..8]); // first two pixels are B
+        assert_eq!(&dst[8..16], &a[8..16]); // last two pixels are A
+    }
+
+    #[test]
+    fn wipe_soft_edge_blends_near_boundary() {
+        let (w, h) = (4u32, 1u32);
+        let a_px = [255u8, 0u8, 0u8, 255u8];
+        let b_px = [0u8, 0u8, 255u8, 255u8];
+
+        let a = a_px.repeat((w * h) as usize);
+        let b = b_px.repeat((w * h) as usize);
+        let mut dst = vec![0u8; (w * h * 4) as usize];
+
+        wipe_over_in_place(
+            &mut dst,
+            &a,
+            &b,
+            WipeParams {
+                width: w,
+                height: h,
+                t: 0.5,
+                dir: WipeDir::LeftToRight,
+                soft_edge: 0.25,
+            },
+        )
+        .unwrap();
+
+        let mid = &dst[8..12]; // pixel 2
+        assert!(mid[0] > 0 && mid[0] < 255);
+        assert!(mid[2] > 0 && mid[2] < 255);
+        assert_eq!(mid[3], 255);
+    }
+
+    #[test]
+    fn wipe_negative_soft_edge_is_treated_as_zero() {
+        let (w, h) = (4u32, 1u32);
+        let a_px = [255u8, 0u8, 0u8, 255u8];
+        let b_px = [0u8, 0u8, 255u8, 255u8];
+
+        let a = a_px.repeat((w * h) as usize);
+        let b = b_px.repeat((w * h) as usize);
+        let mut dst = vec![0u8; (w * h * 4) as usize];
+
+        wipe_over_in_place(
+            &mut dst,
+            &a,
+            &b,
+            WipeParams {
+                width: w,
+                height: h,
+                t: 0.5,
+                dir: WipeDir::LeftToRight,
+                soft_edge: -1.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(&dst[0..8], &b[0..8]);
+        assert_eq!(&dst[8..16], &a[8..16]);
     }
 }
