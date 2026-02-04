@@ -5,6 +5,7 @@ pub mod anim_ease;
 pub mod anim_ops;
 pub mod anim_proc;
 pub mod core;
+pub mod dsl;
 pub mod error;
 pub mod model;
 
