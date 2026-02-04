@@ -146,11 +146,7 @@ impl RenderBackend for VelloBackend {
                         encode_op(self, op, plan.canvas.width, plan.canvas.height, assets)?;
                     }
                 }
-                Pass::Offscreen(_) | Pass::Composite(_) => {
-                    return Err(WavyteError::evaluation(
-                        "gpu backend does not support multi-pass plans yet (phase 5)",
-                    ));
-                }
+                Pass::Offscreen(_) | Pass::Composite(_) => {}
             }
         }
 

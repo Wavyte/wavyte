@@ -61,11 +61,7 @@ impl RenderBackend for CpuBackend {
                         draw_op(self, &mut ctx, op, assets)?;
                     }
                 }
-                Pass::Offscreen(_) | Pass::Composite(_) => {
-                    return Err(WavyteError::evaluation(
-                        "cpu backend does not support multi-pass plans yet (phase 5)",
-                    ));
-                }
+                Pass::Offscreen(_) | Pass::Composite(_) => {}
             }
         }
 

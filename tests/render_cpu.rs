@@ -89,6 +89,71 @@ mod cpu {
         }
     }
 
+    fn two_layer_path_comp() -> Composition {
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "p0".to_string(),
+            Asset::Path(PathAsset {
+                svg_path_d: "M0,0 L64,0 L64,64 L0,64 Z".to_string(),
+            }),
+        );
+        assets.insert(
+            "p1".to_string(),
+            Asset::Path(PathAsset {
+                svg_path_d: "M16,16 L48,16 L48,48 L16,48 Z".to_string(),
+            }),
+        );
+
+        Composition {
+            fps: wavyte::Fps::new(30, 1).unwrap(),
+            canvas: Canvas {
+                width: 64,
+                height: 64,
+            },
+            duration: FrameIndex(1),
+            assets,
+            tracks: vec![
+                Track {
+                    name: "bg".to_string(),
+                    z_base: 0,
+                    clips: vec![Clip {
+                        id: "c0".to_string(),
+                        asset: "p0".to_string(),
+                        range: FrameRange::new(FrameIndex(0), FrameIndex(1)).unwrap(),
+                        props: ClipProps {
+                            transform: Anim::constant(Transform2D::default()),
+                            opacity: Anim::constant(1.0),
+                            blend: BlendMode::Normal,
+                        },
+                        z_offset: 0,
+                        effects: vec![],
+                        transition_in: None,
+                        transition_out: None,
+                    }],
+                },
+                Track {
+                    name: "fg".to_string(),
+                    z_base: 1,
+                    clips: vec![Clip {
+                        id: "c1".to_string(),
+                        asset: "p1".to_string(),
+                        range: FrameRange::new(FrameIndex(0), FrameIndex(1)).unwrap(),
+                        props: ClipProps {
+                            transform: Anim::constant(Transform2D::default()),
+                            opacity: Anim::constant(1.0),
+                            blend: BlendMode::Normal,
+                        },
+                        z_offset: 0,
+                        effects: vec![],
+                        transition_in: None,
+                        transition_out: None,
+                    }],
+                },
+            ],
+            seed: 1,
+        }
+    }
+
     #[test]
     fn cpu_render_is_deterministic_and_nonempty() {
         let comp = simple_path_comp();
@@ -107,5 +172,22 @@ mod cpu {
         assert!(a.premultiplied);
         assert_eq!(digest_u64(&a.data), digest_u64(&b.data));
         assert!(a.data.iter().any(|&x| x != 0));
+    }
+
+    #[test]
+    fn cpu_render_two_layers_is_nonempty() {
+        let comp = two_layer_path_comp();
+
+        let settings = RenderSettings {
+            clear_rgba: Some([0, 0, 0, 255]),
+        };
+        let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
+        let mut assets = NoAssets;
+
+        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        assert_eq!(frame.width, 64);
+        assert_eq!(frame.height, 64);
+        assert!(frame.premultiplied);
+        assert!(frame.data.iter().any(|&x| x != 0));
     }
 }

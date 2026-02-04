@@ -116,9 +116,17 @@ pub fn compile_frame(
     eval: &EvaluatedGraph,
     assets: &mut dyn AssetCache,
 ) -> WavyteResult<RenderPlan> {
-    let mut ops = Vec::<DrawOp>::with_capacity(eval.nodes.len());
+    let mut surfaces = Vec::<SurfaceDesc>::new();
+    surfaces.push(SurfaceDesc {
+        width: comp.canvas.width,
+        height: comp.canvas.height,
+        format: PixelFormat::Rgba8Premul,
+    });
 
-    for node in &eval.nodes {
+    let mut scene_passes = Vec::<Pass>::with_capacity(eval.nodes.len());
+    let mut composite_ops = Vec::<CompositeOp>::with_capacity(eval.nodes.len());
+
+    for (idx, node) in eval.nodes.iter().enumerate() {
         let Some(asset) = comp.assets.get(&node.asset) else {
             return Err(WavyteError::evaluation(format!(
                 "evaluated node '{}' references missing asset key '{}'",
@@ -139,68 +147,86 @@ pub fn compile_frame(
             continue;
         }
 
-        match asset {
+        let op = match asset {
             Asset::Path(a) => {
                 let path = parse_svg_path(&a.svg_path_d)?;
-                ops.push(DrawOp::FillPath {
+                DrawOp::FillPath {
                     path,
                     transform: node.transform,
                     color: Rgba8Premul::from_straight_rgba(255, 255, 255, 255),
                     opacity,
                     blend: node.blend,
                     z: node.z,
-                });
+                }
             }
             Asset::Image(_) => {
                 let id = assets.id_for(asset)?;
-                ops.push(DrawOp::Image {
+                DrawOp::Image {
                     asset: id,
                     transform: node.transform,
                     opacity,
                     blend: node.blend,
                     z: node.z,
-                });
+                }
             }
             Asset::Svg(_) => {
                 let id = assets.id_for(asset)?;
-                ops.push(DrawOp::Svg {
+                DrawOp::Svg {
                     asset: id,
                     transform: node.transform,
                     opacity,
                     blend: node.blend,
                     z: node.z,
-                });
+                }
             }
             Asset::Text(_) => {
                 let id = assets.id_for(asset)?;
-                ops.push(DrawOp::Text {
+                DrawOp::Text {
                     asset: id,
                     transform: node.transform,
                     opacity,
                     blend: node.blend,
                     z: node.z,
-                });
+                }
             }
             Asset::Video(_) | Asset::Audio(_) => {
                 return Err(WavyteError::evaluation(
                     "video/audio rendering is not supported in v0.1.0 phase 4",
                 ));
             }
-        }
+        };
+
+        let surf_id = SurfaceId((surfaces.len()) as u32);
+        surfaces.push(SurfaceDesc {
+            width: comp.canvas.width,
+            height: comp.canvas.height,
+            format: PixelFormat::Rgba8Premul,
+        });
+
+        scene_passes.push(Pass::Scene(ScenePass {
+            target: surf_id,
+            ops: vec![op],
+            clear_to_transparent: true,
+        }));
+
+        let _ = idx;
+        composite_ops.push(CompositeOp::Over {
+            src: surf_id,
+            opacity: 1.0,
+        });
     }
 
     Ok(RenderPlan {
         canvas: comp.canvas,
-        surfaces: vec![SurfaceDesc {
-            width: comp.canvas.width,
-            height: comp.canvas.height,
-            format: PixelFormat::Rgba8Premul,
-        }],
-        passes: vec![Pass::Scene(ScenePass {
-            target: SurfaceId(0),
-            ops,
-            clear_to_transparent: false,
-        })],
+        surfaces,
+        passes: {
+            let mut out = scene_passes;
+            out.push(Pass::Composite(CompositePass {
+                target: SurfaceId(0),
+                ops: composite_ops,
+            }));
+            out
+        },
         final_surface: SurfaceId(0),
     })
 }
