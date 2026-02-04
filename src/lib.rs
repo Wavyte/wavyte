@@ -7,6 +7,7 @@ pub mod anim_proc;
 pub mod core;
 pub mod dsl;
 pub mod error;
+pub mod eval;
 pub mod model;
 
 pub use anim::Anim;
