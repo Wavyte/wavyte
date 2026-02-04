@@ -72,11 +72,13 @@ impl AssetKey {
 pub trait AssetCache {
     fn id_for(&mut self, asset: &model::Asset) -> WavyteResult<AssetId>;
     fn get_or_load(&mut self, asset: &model::Asset) -> WavyteResult<PreparedAsset>;
+    fn get_or_load_by_id(&mut self, id: AssetId) -> WavyteResult<PreparedAsset>;
 }
 
 pub struct FsAssetCache {
     root: PathBuf,
     keys_by_id: HashMap<AssetId, AssetKey>,
+    asset_by_id: HashMap<AssetId, model::Asset>,
     prepared: HashMap<AssetId, PreparedAsset>,
     decode_counts: HashMap<AssetId, u32>,
     text_engine: TextLayoutEngine,
@@ -87,6 +89,7 @@ impl FsAssetCache {
         Self {
             root: root.into(),
             keys_by_id: HashMap::new(),
+            asset_by_id: HashMap::new(),
             prepared: HashMap::new(),
             decode_counts: HashMap::new(),
             text_engine: TextLayoutEngine::new(),
@@ -168,6 +171,7 @@ impl AssetCache for FsAssetCache {
         let (kind, key) = self.key_for(asset)?;
         let id = Self::id_for_key(kind, &key);
         self.keys_by_id.entry(id).or_insert(key);
+        self.asset_by_id.entry(id).or_insert_with(|| asset.clone());
         Ok(id)
     }
 
@@ -175,6 +179,7 @@ impl AssetCache for FsAssetCache {
         let (kind, key) = self.key_for(asset)?;
         let id = Self::id_for_key(kind, &key);
         self.keys_by_id.entry(id).or_insert_with(|| key.clone());
+        self.asset_by_id.entry(id).or_insert_with(|| asset.clone());
 
         if let Some(p) = self.prepared.get(&id) {
             return Ok(p.clone());
@@ -218,6 +223,15 @@ impl AssetCache for FsAssetCache {
         *self.decode_counts.entry(id).or_insert(0) += 1;
         self.prepared.insert(id, prepared.clone());
         Ok(prepared)
+    }
+
+    fn get_or_load_by_id(&mut self, id: AssetId) -> WavyteResult<PreparedAsset> {
+        let asset = self
+            .asset_by_id
+            .get(&id)
+            .ok_or_else(|| WavyteError::evaluation("unknown AssetId (not registered in cache)"))?
+            .clone();
+        self.get_or_load(&asset)
     }
 }
 

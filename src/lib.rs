@@ -12,6 +12,13 @@ mod dsl;
 mod error;
 mod eval;
 mod model;
+mod pipeline;
+mod render;
+
+#[cfg(feature = "cpu")]
+mod render_cpu;
+#[cfg(feature = "gpu")]
+mod render_vello;
 
 pub use anim::{Anim, InterpMode, Keyframe, Keyframes, LoopMode, SampleCtx};
 pub use anim_ease::Ease;
@@ -33,3 +40,5 @@ pub use model::{
     Asset, AudioAsset, BlendMode, Clip, ClipProps, Composition, EffectInstance, ImageAsset,
     PathAsset, SvgAsset, TextAsset, Track, TransitionSpec, VideoAsset,
 };
+pub use pipeline::render_frame;
+pub use render::{BackendKind, FrameRGBA, RenderBackend, RenderSettings, create_backend};

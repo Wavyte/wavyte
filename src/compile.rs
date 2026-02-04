@@ -172,6 +172,13 @@ mod tests {
         fn get_or_load(&mut self, _asset: &Asset) -> WavyteResult<crate::assets::PreparedAsset> {
             Err(WavyteError::evaluation("no assets in this test"))
         }
+
+        fn get_or_load_by_id(
+            &mut self,
+            _id: AssetId,
+        ) -> WavyteResult<crate::assets::PreparedAsset> {
+            Err(WavyteError::evaluation("no assets in this test"))
+        }
     }
 
     #[test]
