@@ -58,6 +58,16 @@ pub enum PreparedAsset {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AssetId(pub(crate) u64);
 
+impl AssetId {
+    pub fn from_u64(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AssetKey {
     pub norm_path: String,
