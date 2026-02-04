@@ -20,6 +20,9 @@ target
 # Not tracking assets directory
 assets
 
+# Bench harness (non-library) artifacts
+bench/Cargo.lock
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
