@@ -169,7 +169,7 @@ impl Default for RenderToMp4Opts {
 /// error if it is not available.
 ///
 /// Notes:
-/// - v0.1.0 currently requires integer FPS (`comp.fps.den == 1`) for MP4 output.
+/// - v0.2.0 currently requires integer FPS (`comp.fps.den == 1`) for MP4 output.
 /// - Frames are rendered as premultiplied RGBA8; the encoder can flatten alpha over `bg_rgba`.
 pub fn render_to_mp4(
     comp: &Composition,

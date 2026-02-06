@@ -61,7 +61,7 @@ pub fn parse_effect(inst: &EffectInstance) -> WavyteResult<Effect> {
             let radius_px = get_u32(&inst.params, "radius_px")?;
             if radius_px > 256 {
                 return Err(WavyteError::validation(
-                    "Blur.radius_px must be <= 256 in v0.1.0",
+                    "Blur.radius_px must be <= 256 in v0.2.0",
                 ));
             }
             let sigma = match inst.params.get("sigma") {

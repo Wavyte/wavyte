@@ -190,7 +190,7 @@ impl ProcValue for Vec2 {
 impl ProcValue for Transform2D {
     fn from_procedural(_kind: &ProceduralKind, _ctx: SampleCtx) -> WavyteResult<Self> {
         Err(WavyteError::animation(
-            "procedural sampling for Transform2D is not supported in v0.1",
+            "procedural sampling for Transform2D is not supported in v0.2",
         ))
     }
 }
@@ -198,7 +198,7 @@ impl ProcValue for Transform2D {
 impl ProcValue for crate::core::Rgba8Premul {
     fn from_procedural(_kind: &ProceduralKind, _ctx: SampleCtx) -> WavyteResult<Self> {
         Err(WavyteError::animation(
-            "procedural sampling for Rgba8Premul is not supported in v0.1",
+            "procedural sampling for Rgba8Premul is not supported in v0.2",
         ))
     }
 }

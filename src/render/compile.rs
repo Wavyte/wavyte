@@ -278,7 +278,7 @@ pub fn compile_frame(
                     let t_in = (in_tr.progress as f32).clamp(0.0, 1.0);
                     let t_out = (out_tr.progress as f32).clamp(0.0, 1.0);
 
-                    // Explicit v0.1 pairing rule: the Out and In edges must agree on progress
+                    // Explicit v0.2 pairing rule: the Out and In edges must agree on progress
                     // (same duration/ease and overlapping window).
                     let progress_close = (t_in - t_out).abs() <= 0.05;
 

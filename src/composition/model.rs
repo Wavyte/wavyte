@@ -117,8 +117,6 @@ pub enum BlendMode {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 /// An asset referenced by clips.
-///
-/// Some asset kinds (audio/video) exist in the model but are not renderable in v0.1.0.
 pub enum Asset {
     Text(TextAsset),
     Svg(SvgAsset),

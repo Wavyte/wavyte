@@ -7,7 +7,7 @@ use crate::{
 
 /// A rendered frame as RGBA8 pixels.
 ///
-/// In Wavyte v0.1.0, frames are **premultiplied alpha** by default. The `premultiplied` flag is
+/// In Wavyte v0.2.0, frames are **premultiplied alpha** by default. The `premultiplied` flag is
 /// included to make this explicit at API boundaries.
 #[derive(Clone, Debug)]
 pub struct FrameRGBA {
