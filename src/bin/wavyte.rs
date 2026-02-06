@@ -76,7 +76,6 @@ struct RenderArgs {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum BackendChoice {
     Cpu,
-    Gpu,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -101,13 +100,6 @@ fn make_backend(
 ) -> anyhow::Result<Box<dyn wavyte::RenderBackend>> {
     let kind = match choice {
         BackendChoice::Cpu => wavyte::BackendKind::Cpu,
-        BackendChoice::Gpu => {
-            if cfg!(feature = "gpu") {
-                wavyte::BackendKind::Gpu
-            } else {
-                anyhow::bail!("built without `gpu` feature")
-            }
-        }
     };
 
     Ok(wavyte::create_backend(kind, settings)?)
@@ -124,17 +116,17 @@ fn cmd_frame(args: FrameArgs) -> anyhow::Result<()> {
     let mut backend = make_backend(args.backend, &settings)?;
 
     let assets_root = args.in_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut assets = wavyte::FsAssetCache::new(assets_root);
+    let assets = wavyte::PreparedAssetStore::prepare(&comp, assets_root)?;
 
     if args.dump_fonts || args.dump_svg_fonts {
-        dump_font_diagnostics(&comp, &mut assets, args.dump_fonts, args.dump_svg_fonts)?;
+        dump_font_diagnostics(&comp, &assets, args.dump_fonts, args.dump_svg_fonts)?;
     }
 
     let frame = wavyte::render_frame(
         &comp,
         wavyte::FrameIndex(args.frame),
         backend.as_mut(),
-        &mut assets,
+        &assets,
     )?;
 
     if let Some(parent) = args.out.parent() {
@@ -166,19 +158,20 @@ fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
     let mut backend = make_backend(args.backend, &settings)?;
 
     let assets_root = args.in_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut assets = wavyte::FsAssetCache::new(assets_root);
+    let assets = wavyte::PreparedAssetStore::prepare(&comp, assets_root)?;
 
     if args.dump_fonts || args.dump_svg_fonts {
-        dump_font_diagnostics(&comp, &mut assets, args.dump_fonts, args.dump_svg_fonts)?;
+        dump_font_diagnostics(&comp, &assets, args.dump_fonts, args.dump_svg_fonts)?;
     }
 
     let opts = wavyte::RenderToMp4Opts {
         range: wavyte::FrameRange::new(wavyte::FrameIndex(0), comp.duration)?,
         bg_rgba: settings.clear_rgba.unwrap_or([0, 0, 0, 255]),
         overwrite: true,
+        threading: wavyte::RenderThreading::default(),
     };
 
-    wavyte::render_to_mp4(&comp, &args.out, opts, backend.as_mut(), &mut assets)?;
+    wavyte::render_to_mp4(&comp, &args.out, opts, backend.as_mut(), &assets)?;
 
     eprintln!("wrote {}", args.out.display());
     Ok(())
@@ -186,7 +179,7 @@ fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
 
 fn dump_font_diagnostics(
     comp: &wavyte::Composition,
-    assets: &mut dyn wavyte::AssetCache,
+    assets: &wavyte::PreparedAssetStore,
     dump_text: bool,
     dump_svg: bool,
 ) -> anyhow::Result<()> {
@@ -197,8 +190,11 @@ fn dump_font_diagnostics(
                 continue;
             };
 
+            let asset_id = assets
+                .id_for_key(key)
+                .with_context(|| format!("resolve text asset id '{key}'"))?;
             let prepared = assets
-                .get_or_load(asset)
+                .get(asset_id)
                 .with_context(|| format!("load text asset '{key}'"))?;
             let wavyte::PreparedAsset::Text(p) = prepared else {
                 anyhow::bail!("text asset '{key}' did not prepare as text (bug)");
@@ -219,8 +215,11 @@ fn dump_font_diagnostics(
                 continue;
             };
 
+            let asset_id = assets
+                .id_for_key(key)
+                .with_context(|| format!("resolve svg asset id '{key}'"))?;
             let prepared = assets
-                .get_or_load(asset)
+                .get(asset_id)
                 .with_context(|| format!("load svg asset '{key}'"))?;
             let wavyte::PreparedAsset::Svg(p) = prepared else {
                 anyhow::bail!("svg asset '{key}' did not prepare as svg (bug)");

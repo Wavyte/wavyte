@@ -11,15 +11,8 @@ use wavyte::{
 fn parse_backend() -> anyhow::Result<BackendKind> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
-        Some("cpu") => Ok(BackendKind::Cpu),
-        Some("gpu") => {
-            if cfg!(feature = "gpu") {
-                Ok(BackendKind::Gpu)
-            } else {
-                anyhow::bail!("built without `gpu` feature")
-            }
-        }
-        _ => Ok(BackendKind::Cpu),
+        Some("cpu") | None => Ok(BackendKind::Cpu),
+        Some(other) => anyhow::bail!("unknown backend '{other}', only 'cpu' is supported"),
     }
 }
 
@@ -47,6 +40,12 @@ fn build_comp() -> Composition {
         tracks: vec![Track {
             name: "main".to_string(),
             z_base: 0,
+            layout_mode: wavyte::LayoutMode::Absolute,
+            layout_gap_px: 0.0,
+            layout_padding: wavyte::Edges::default(),
+            layout_align_x: wavyte::LayoutAlignX::Start,
+            layout_align_y: wavyte::LayoutAlignY::Start,
+            layout_grid_columns: 2,
             clips: vec![Clip {
                 id: "blurred_rect".to_string(),
                 asset: "rect".to_string(),
@@ -88,9 +87,9 @@ fn try_main() -> anyhow::Result<()> {
         clear_rgba: Some([18, 20, 28, 255]),
     };
     let mut backend = create_backend(parse_backend()?, &settings)?;
-    let mut assets = wavyte::FsAssetCache::new(".");
+    let assets = wavyte::PreparedAssetStore::prepare(&comp, ".")?;
 
-    let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets)?;
+    let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets)?;
 
     let out_dir = PathBuf::from("assets");
     std::fs::create_dir_all(&out_dir)?;

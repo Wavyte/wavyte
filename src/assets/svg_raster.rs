@@ -2,7 +2,7 @@ use crate::error::{WavyteError, WavyteResult};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SvgRasterKey {
-    pub asset: crate::assets::AssetId,
+    pub asset: crate::asset_store::AssetId,
     pub width: u32,
     pub height: u32,
 }

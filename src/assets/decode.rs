@@ -4,7 +4,7 @@ use anyhow::Context;
 
 use crate::{
     WavyteResult,
-    assets::{PreparedImage, PreparedSvg},
+    asset_store::{PreparedImage, PreparedSvg},
 };
 
 pub fn decode_image(bytes: &[u8]) -> WavyteResult<PreparedImage> {

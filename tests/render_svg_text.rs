@@ -3,8 +3,8 @@ mod svg_text {
 
     use usvg::Node;
     use wavyte::{
-        Anim, Asset, AssetCache as _, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition,
-        FrameIndex, FrameRange, FsAssetCache, RenderSettings, SvgAsset, Track, Transform2D, Vec2,
+        Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, FrameIndex,
+        FrameRange, PreparedAssetStore, RenderSettings, SvgAsset, Track, Transform2D, Vec2,
         create_backend, render_frame,
     };
 
@@ -40,6 +40,12 @@ mod svg_text {
             tracks: vec![Track {
                 name: "main".to_string(),
                 z_base: 0,
+                layout_mode: wavyte::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: wavyte::Edges::default(),
+                layout_align_x: wavyte::LayoutAlignX::Start,
+                layout_align_y: wavyte::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "s0".to_string(),
@@ -83,6 +89,12 @@ mod svg_text {
             tracks: vec![Track {
                 name: "main".to_string(),
                 z_base: 0,
+                layout_mode: wavyte::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: wavyte::Edges::default(),
+                layout_align_x: wavyte::LayoutAlignX::Start,
+                layout_align_y: wavyte::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "s0".to_string(),
@@ -106,14 +118,9 @@ mod svg_text {
         }
     }
 
-    fn assert_svg_fixture_fontdb_contains_inconsolata(
-        assets: &mut FsAssetCache,
-        comp: &Composition,
-    ) {
-        let Some(asset) = comp.assets.get("s0") else {
-            panic!("missing svg asset 's0' in test composition");
-        };
-        let prepared = assets.get_or_load(asset).unwrap();
+    fn assert_svg_fixture_fontdb_contains_inconsolata(assets: &PreparedAssetStore) {
+        let id = assets.id_for_key("s0").unwrap();
+        let prepared = assets.get(id).unwrap();
         let wavyte::PreparedAsset::Svg(p) = prepared else {
             panic!("expected prepared svg asset");
         };
@@ -136,11 +143,11 @@ mod svg_text {
             clear_rgba: Some([0, 0, 0, 0]),
         };
         let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
-        let mut assets = FsAssetCache::new("tests/data");
+        let assets = PreparedAssetStore::prepare(&comp, "tests/data").unwrap();
 
-        assert_svg_fixture_fontdb_contains_inconsolata(&mut assets, &comp);
+        assert_svg_fixture_fontdb_contains_inconsolata(&assets);
 
-        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
         assert_eq!(frame.width, 512);
         assert_eq!(frame.height, 192);
         assert!(frame.premultiplied);
@@ -157,51 +164,18 @@ mod svg_text {
             clear_rgba: Some([0, 0, 0, 0]),
         };
         let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
-        let mut assets = FsAssetCache::new("tests/data");
+        let assets = PreparedAssetStore::prepare(&comp, "tests/data").unwrap();
 
         // The fixture references nonexistent family names. This should still render text by falling
         // back to any available face (vendored font in tests/data/fonts).
-        let Some(asset) = comp.assets.get("s0") else {
-            panic!("missing svg asset 's0' in test composition");
-        };
-        let prepared = assets.get_or_load(asset).unwrap();
+        let id = assets.id_for_key("s0").unwrap();
+        let prepared = assets.get(id).unwrap();
         let wavyte::PreparedAsset::Svg(p) = prepared else {
             panic!("expected prepared svg asset");
         };
         assert_eq!(count_text_nodes(p.tree.root()), 1);
 
-        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
         assert!(frame.data.iter().any(|&b| b != 0));
-    }
-
-    #[cfg(feature = "gpu")]
-    mod gpu {
-        use super::*;
-
-        #[test]
-        fn gpu_svg_text_renders_nonempty_or_skips_if_no_adapter() {
-            let comp = comp_with_svg_text();
-            let settings = RenderSettings {
-                clear_rgba: Some([0, 0, 0, 0]),
-            };
-            let mut backend = create_backend(BackendKind::Gpu, &settings).unwrap();
-            let mut assets = FsAssetCache::new("tests/data");
-
-            assert_svg_fixture_fontdb_contains_inconsolata(&mut assets, &comp);
-
-            let frame = match render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets) {
-                Ok(v) => v,
-                Err(e) if e.to_string().contains("no gpu adapter available") => return,
-                Err(e) => panic!("unexpected gpu render error: {e}"),
-            };
-
-            assert_eq!(frame.width, 512);
-            assert_eq!(frame.height, 192);
-            assert!(frame.premultiplied);
-            assert!(
-                frame.data.iter().any(|&b| b != 0),
-                "expected non-empty pixels; svg fixture contains only <text> on transparent background"
-            );
-        }
     }
 }

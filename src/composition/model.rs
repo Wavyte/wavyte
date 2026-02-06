@@ -30,7 +30,61 @@ pub struct Composition {
 pub struct Track {
     pub name: String,
     pub z_base: i32,
+    #[serde(default)]
+    pub layout_mode: LayoutMode,
+    #[serde(default)]
+    pub layout_gap_px: f64,
+    #[serde(default)]
+    pub layout_padding: Edges,
+    #[serde(default)]
+    pub layout_align_x: LayoutAlignX,
+    #[serde(default)]
+    pub layout_align_y: LayoutAlignY,
+    #[serde(default = "default_layout_grid_columns")]
+    pub layout_grid_columns: u32,
     pub clips: Vec<Clip>,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum LayoutMode {
+    #[default]
+    Absolute,
+    HStack,
+    VStack,
+    Grid,
+    Center,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct Edges {
+    #[serde(default)]
+    pub left: f64,
+    #[serde(default)]
+    pub right: f64,
+    #[serde(default)]
+    pub top: f64,
+    #[serde(default)]
+    pub bottom: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum LayoutAlignX {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum LayoutAlignY {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+fn default_layout_grid_columns() -> u32 {
+    2
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -63,8 +117,6 @@ pub enum BlendMode {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 /// An asset referenced by clips.
-///
-/// Some asset kinds (audio/video) exist in the model but are not renderable in v0.1.0.
 pub enum Asset {
     Text(TextAsset),
     Svg(SvgAsset),
@@ -107,11 +159,47 @@ pub struct ImageAsset {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VideoAsset {
     pub source: String,
+    #[serde(default)]
+    pub trim_start_sec: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trim_end_sec: Option<f64>,
+    #[serde(default = "default_playback_rate")]
+    pub playback_rate: f64,
+    #[serde(default = "default_volume")]
+    pub volume: f64,
+    #[serde(default)]
+    pub fade_in_sec: f64,
+    #[serde(default)]
+    pub fade_out_sec: f64,
+    #[serde(default)]
+    pub muted: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AudioAsset {
     pub source: String,
+    #[serde(default)]
+    pub trim_start_sec: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trim_end_sec: Option<f64>,
+    #[serde(default = "default_playback_rate")]
+    pub playback_rate: f64,
+    #[serde(default = "default_volume")]
+    pub volume: f64,
+    #[serde(default)]
+    pub fade_in_sec: f64,
+    #[serde(default)]
+    pub fade_out_sec: f64,
+    #[serde(default)]
+    pub muted: bool,
+}
+
+fn default_playback_rate() -> f64 {
+    1.0
+}
+
+fn default_volume() -> f64 {
+    1.0
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -143,6 +231,29 @@ impl Composition {
         }
 
         for track in &self.tracks {
+            if !track.layout_gap_px.is_finite() || track.layout_gap_px < 0.0 {
+                return Err(WavyteError::validation(
+                    "track layout_gap_px must be finite and >= 0",
+                ));
+            }
+            for (name, value) in [
+                ("left", track.layout_padding.left),
+                ("right", track.layout_padding.right),
+                ("top", track.layout_padding.top),
+                ("bottom", track.layout_padding.bottom),
+            ] {
+                if !value.is_finite() || value < 0.0 {
+                    return Err(WavyteError::validation(format!(
+                        "track layout_padding.{name} must be finite and >= 0",
+                    )));
+                }
+            }
+            if track.layout_mode == LayoutMode::Grid && track.layout_grid_columns == 0 {
+                return Err(WavyteError::validation(
+                    "track layout_grid_columns must be > 0 for Grid layout",
+                ));
+            }
+
             for clip in &track.clips {
                 if !self.assets.contains_key(&clip.asset) {
                     return Err(WavyteError::validation(format!(
@@ -200,8 +311,30 @@ impl Composition {
                 }
                 Asset::Svg(a) => validate_rel_source(&a.source, "svg asset source")?,
                 Asset::Image(a) => validate_rel_source(&a.source, "image asset source")?,
-                Asset::Video(a) => validate_rel_source(&a.source, "video asset source")?,
-                Asset::Audio(a) => validate_rel_source(&a.source, "audio asset source")?,
+                Asset::Video(a) => {
+                    validate_rel_source(&a.source, "video asset source")?;
+                    validate_media_controls(
+                        a.trim_start_sec,
+                        a.trim_end_sec,
+                        a.playback_rate,
+                        a.volume,
+                        a.fade_in_sec,
+                        a.fade_out_sec,
+                        "video asset",
+                    )?;
+                }
+                Asset::Audio(a) => {
+                    validate_rel_source(&a.source, "audio asset source")?;
+                    validate_media_controls(
+                        a.trim_start_sec,
+                        a.trim_end_sec,
+                        a.playback_rate,
+                        a.volume,
+                        a.fade_in_sec,
+                        a.fade_out_sec,
+                        "audio asset",
+                    )?;
+                }
                 Asset::Path(a) => {
                     if a.svg_path_d.trim().is_empty() {
                         return Err(WavyteError::validation(
@@ -234,6 +367,50 @@ fn validate_rel_source(source: &str, field: &str) -> WavyteResult<()> {
                 "{field} must not contain '..'"
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_media_controls(
+    trim_start_sec: f64,
+    trim_end_sec: Option<f64>,
+    playback_rate: f64,
+    volume: f64,
+    fade_in_sec: f64,
+    fade_out_sec: f64,
+    kind: &str,
+) -> WavyteResult<()> {
+    if !trim_start_sec.is_finite() || trim_start_sec < 0.0 {
+        return Err(WavyteError::validation(format!(
+            "{kind} trim_start_sec must be finite and >= 0",
+        )));
+    }
+    if let Some(end) = trim_end_sec
+        && (!end.is_finite() || end <= trim_start_sec)
+    {
+        return Err(WavyteError::validation(format!(
+            "{kind} trim_end_sec must be finite and > trim_start_sec",
+        )));
+    }
+    if !playback_rate.is_finite() || playback_rate <= 0.0 {
+        return Err(WavyteError::validation(format!(
+            "{kind} playback_rate must be finite and > 0",
+        )));
+    }
+    if !volume.is_finite() || volume < 0.0 {
+        return Err(WavyteError::validation(format!(
+            "{kind} volume must be finite and >= 0",
+        )));
+    }
+    if !fade_in_sec.is_finite() || fade_in_sec < 0.0 {
+        return Err(WavyteError::validation(format!(
+            "{kind} fade_in_sec must be finite and >= 0",
+        )));
+    }
+    if !fade_out_sec.is_finite() || fade_out_sec < 0.0 {
+        return Err(WavyteError::validation(format!(
+            "{kind} fade_out_sec must be finite and >= 0",
+        )));
     }
     Ok(())
 }
@@ -285,6 +462,12 @@ mod tests {
             tracks: vec![Track {
                 name: "main".to_string(),
                 z_base: 0,
+                layout_mode: LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: Edges::default(),
+                layout_align_x: LayoutAlignX::Start,
+                layout_align_y: LayoutAlignY::Start,
+                layout_grid_columns: default_layout_grid_columns(),
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "t0".to_string(),
@@ -345,6 +528,61 @@ mod tests {
     fn validate_rejects_bad_fps() {
         let mut comp = basic_comp();
         comp.fps = Fps { num: 30, den: 0 };
+        assert!(comp.validate().is_err());
+    }
+
+    #[test]
+    fn media_assets_serde_defaults_and_validation() {
+        let json = r#"{
+            "fps": {"num": 30, "den": 1},
+            "canvas": {"width": 640, "height": 360},
+            "duration": 30,
+            "assets": {
+                "v0": {"Video": {"source": "assets/a.mp4"}},
+                "a0": {"Audio": {"source": "assets/b.wav"}}
+            },
+            "tracks": [],
+            "seed": 1
+        }"#;
+        let comp: Composition = serde_json::from_str(json).unwrap();
+        comp.validate().unwrap();
+
+        let Asset::Video(v) = comp.assets.get("v0").unwrap() else {
+            panic!("expected video asset");
+        };
+        assert_eq!(v.trim_start_sec, 0.0);
+        assert_eq!(v.playback_rate, 1.0);
+        assert_eq!(v.volume, 1.0);
+        assert!(!v.muted);
+    }
+
+    #[test]
+    fn media_validation_rejects_non_positive_playback_rate() {
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "v0".to_string(),
+            Asset::Video(VideoAsset {
+                source: "assets/a.mp4".to_string(),
+                trim_start_sec: 0.0,
+                trim_end_sec: None,
+                playback_rate: 0.0,
+                volume: 1.0,
+                fade_in_sec: 0.0,
+                fade_out_sec: 0.0,
+                muted: false,
+            }),
+        );
+        let comp = Composition {
+            fps: Fps::new(30, 1).unwrap(),
+            canvas: Canvas {
+                width: 64,
+                height: 64,
+            },
+            duration: FrameIndex(10),
+            assets,
+            tracks: vec![],
+            seed: 1,
+        };
         assert!(comp.validate().is_err());
     }
 }

@@ -33,6 +33,12 @@ fn cli_frame_writes_png() {
         tracks: vec![Track {
             name: "main".to_string(),
             z_base: 0,
+            layout_mode: wavyte::LayoutMode::Absolute,
+            layout_gap_px: 0.0,
+            layout_padding: wavyte::Edges::default(),
+            layout_align_x: wavyte::LayoutAlignX::Start,
+            layout_align_y: wavyte::LayoutAlignY::Start,
+            layout_grid_columns: 2,
             clips: vec![Clip {
                 id: "c0".to_string(),
                 asset: "p0".to_string(),
@@ -57,7 +63,12 @@ fn cli_frame_writes_png() {
     let exe = std::env::var_os("CARGO_BIN_EXE_wavyte")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            let mut p = PathBuf::from("target").join("debug");
+            let profile_dir = if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            };
+            let mut p = PathBuf::from("target").join(profile_dir);
             p.push(if cfg!(windows) {
                 "wavyte.exe"
             } else {

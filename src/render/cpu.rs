@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use crate::{
-    assets::{AssetCache, AssetId, PreparedAsset},
+    asset_store::{AssetId, PreparedAsset, PreparedAssetStore},
     compile::{CompositeOp, DrawOp, SurfaceDesc, SurfaceId},
     error::{WavyteError, WavyteResult},
+    media,
     render::{FrameRGBA, RenderBackend, RenderSettings},
     render_passes::PassBackend,
     svg_raster::{SvgRasterKey, rasterize_svg_to_premul_rgba8, svg_raster_params},
@@ -14,6 +15,7 @@ pub struct CpuBackend {
     image_cache: HashMap<AssetId, vello_cpu::Image>,
     svg_cache: HashMap<SvgRasterKey, vello_cpu::Image>,
     font_cache: HashMap<AssetId, vello_cpu::peniko::FontData>,
+    video_decoders: HashMap<AssetId, VideoFrameDecoder>,
     surfaces: HashMap<SurfaceId, CpuSurface>,
 }
 
@@ -23,6 +25,55 @@ struct CpuSurface {
     pixmap: vello_cpu::Pixmap,
 }
 
+struct VideoFrameDecoder {
+    info: std::sync::Arc<media::VideoSourceInfo>,
+    frame_cache: HashMap<u64, vello_cpu::Image>,
+    lru: VecDeque<u64>,
+    capacity: usize,
+}
+
+impl VideoFrameDecoder {
+    fn new(info: std::sync::Arc<media::VideoSourceInfo>) -> Self {
+        Self {
+            info,
+            frame_cache: HashMap::new(),
+            lru: VecDeque::new(),
+            capacity: 8,
+        }
+    }
+
+    fn decode_at(&mut self, source_time_s: f64) -> WavyteResult<vello_cpu::Image> {
+        let key_ms = ((source_time_s.max(0.0)) * 1000.0).round() as u64;
+        if let Some(img) = self.frame_cache.get(&key_ms).cloned() {
+            self.touch(key_ms);
+            return Ok(img);
+        }
+
+        let rgba = media::decode_video_frame_rgba8(&self.info, source_time_s)?;
+        let pixmap = image_premul_bytes_to_pixmap(&rgba, self.info.width, self.info.height)?;
+        let image = vello_cpu::Image {
+            image: vello_cpu::ImageSource::Pixmap(std::sync::Arc::new(pixmap)),
+            sampler: vello_cpu::peniko::ImageSampler::default(),
+        };
+
+        self.frame_cache.insert(key_ms, image.clone());
+        self.touch(key_ms);
+        while self.lru.len() > self.capacity {
+            if let Some(old) = self.lru.pop_front() {
+                self.frame_cache.remove(&old);
+            }
+        }
+        Ok(image)
+    }
+
+    fn touch(&mut self, key: u64) {
+        if let Some(pos) = self.lru.iter().position(|x| *x == key) {
+            self.lru.remove(pos);
+        }
+        self.lru.push_back(key);
+    }
+}
+
 impl CpuBackend {
     pub fn new(settings: RenderSettings) -> Self {
         Self {
@@ -30,6 +81,7 @@ impl CpuBackend {
             image_cache: HashMap::new(),
             svg_cache: HashMap::new(),
             font_cache: HashMap::new(),
+            video_decoders: HashMap::new(),
             surfaces: HashMap::new(),
         }
     }
@@ -73,7 +125,7 @@ impl PassBackend for CpuBackend {
     fn exec_scene(
         &mut self,
         pass: &crate::compile::ScenePass,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<()> {
         let mut surface = self.surfaces.remove(&pass.target).ok_or_else(|| {
             WavyteError::evaluation(format!(
@@ -99,7 +151,7 @@ impl PassBackend for CpuBackend {
     fn exec_offscreen(
         &mut self,
         pass: &crate::compile::OffscreenPass,
-        _assets: &mut dyn AssetCache,
+        _assets: &PreparedAssetStore,
     ) -> WavyteResult<()> {
         let mut output = self.surfaces.remove(&pass.output).ok_or_else(|| {
             WavyteError::evaluation(format!(
@@ -144,7 +196,7 @@ impl PassBackend for CpuBackend {
     fn exec_composite(
         &mut self,
         pass: &crate::compile::CompositePass,
-        _assets: &mut dyn AssetCache,
+        _assets: &PreparedAssetStore,
     ) -> WavyteResult<()> {
         let mut dst = self.surfaces.remove(&pass.target).ok_or_else(|| {
             WavyteError::evaluation(format!(
@@ -230,7 +282,7 @@ impl PassBackend for CpuBackend {
         &mut self,
         surface: SurfaceId,
         plan: &crate::compile::RenderPlan,
-        _assets: &mut dyn AssetCache,
+        _assets: &PreparedAssetStore,
     ) -> WavyteResult<FrameRGBA> {
         let s = self.surfaces.remove(&surface).ok_or_else(|| {
             WavyteError::evaluation(format!(
@@ -248,7 +300,11 @@ impl PassBackend for CpuBackend {
     }
 }
 
-impl RenderBackend for CpuBackend {}
+impl RenderBackend for CpuBackend {
+    fn worker_render_settings(&self) -> Option<RenderSettings> {
+        Some(self.settings.clone())
+    }
+}
 
 fn premul_rgba8(r: u8, g: u8, b: u8, a: u8) -> [u8; 4] {
     let af = (a as u16) + 1;
@@ -267,7 +323,7 @@ fn draw_op(
     backend: &mut CpuBackend,
     ctx: &mut vello_cpu::RenderContext,
     op: &DrawOp,
-    assets: &mut dyn AssetCache,
+    assets: &PreparedAssetStore,
 ) -> WavyteResult<()> {
     ctx.set_paint_transform(vello_cpu::kurbo::Affine::IDENTITY);
 
@@ -324,7 +380,7 @@ fn draw_op(
             blend: _,
             z: _,
         } => {
-            let prepared = assets.get_or_load_by_id(*asset)?;
+            let prepared = assets.get(*asset)?;
             let PreparedAsset::Text(t) = prepared else {
                 return Err(WavyteError::evaluation("AssetId is not a PreparedText"));
             };
@@ -385,6 +441,28 @@ fn draw_op(
                 ctx.pop_layer();
             }
 
+            Ok(())
+        }
+        DrawOp::Video {
+            asset,
+            source_time_s,
+            transform,
+            opacity,
+            blend: _,
+            z: _,
+        } => {
+            let video_paint = backend.video_paint_for(*asset, *source_time_s, assets)?;
+            let (w, h) = image_paint_size(&video_paint)?;
+
+            ctx.set_transform(affine_to_cpu(*transform));
+            ctx.set_paint(video_paint);
+            if *opacity < 1.0 {
+                ctx.push_opacity_layer(*opacity);
+            }
+            ctx.fill_rect(&vello_cpu::kurbo::Rect::new(0.0, 0.0, w, h));
+            if *opacity < 1.0 {
+                ctx.pop_layer();
+            }
             Ok(())
         }
     }
@@ -467,13 +545,13 @@ impl CpuBackend {
     fn image_paint_for(
         &mut self,
         id: AssetId,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<vello_cpu::Image> {
         if let Some(paint) = self.image_cache.get(&id) {
             return Ok(paint.clone());
         }
 
-        let prepared = assets.get_or_load_by_id(id)?;
+        let prepared = assets.get(id)?;
         let PreparedAsset::Image(img) = prepared else {
             return Err(WavyteError::evaluation("AssetId is not a PreparedImage"));
         };
@@ -492,13 +570,13 @@ impl CpuBackend {
     fn font_for_text_asset(
         &mut self,
         id: AssetId,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<vello_cpu::peniko::FontData> {
         if let Some(font) = self.font_cache.get(&id) {
             return Ok(font.clone());
         }
 
-        let prepared = assets.get_or_load_by_id(id)?;
+        let prepared = assets.get(id)?;
         let PreparedAsset::Text(t) = prepared else {
             return Err(WavyteError::evaluation("AssetId is not a PreparedText"));
         };
@@ -513,9 +591,9 @@ impl CpuBackend {
         &mut self,
         id: AssetId,
         transform: crate::core::Affine,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<(vello_cpu::Image, f64, f64, crate::core::Affine)> {
-        let prepared = assets.get_or_load_by_id(id)?;
+        let prepared = assets.get(id)?;
         let PreparedAsset::Svg(svg) = prepared else {
             return Err(WavyteError::evaluation("AssetId is not a PreparedSvg"));
         };
@@ -540,5 +618,22 @@ impl CpuBackend {
 
         self.svg_cache.insert(key, paint.clone());
         Ok((paint, w as f64, h as f64, transform_adjust))
+    }
+
+    fn video_paint_for(
+        &mut self,
+        id: AssetId,
+        source_time_s: f64,
+        assets: &PreparedAssetStore,
+    ) -> WavyteResult<vello_cpu::Image> {
+        let prepared = assets.get(id)?;
+        let PreparedAsset::Video(video) = prepared else {
+            return Err(WavyteError::evaluation("AssetId is not a PreparedVideo"));
+        };
+        let decoder = self
+            .video_decoders
+            .entry(id)
+            .or_insert_with(|| VideoFrameDecoder::new(video.info.clone()));
+        decoder.decode_at(source_time_s)
     }
 }

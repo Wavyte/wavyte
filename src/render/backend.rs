@@ -1,5 +1,5 @@
 use crate::{
-    assets::AssetCache,
+    asset_store::PreparedAssetStore,
     compile::RenderPlan,
     error::WavyteResult,
     render_passes::{PassBackend, execute_plan},
@@ -7,7 +7,7 @@ use crate::{
 
 /// A rendered frame as RGBA8 pixels.
 ///
-/// In Wavyte v0.1.0, frames are **premultiplied alpha** by default. The `premultiplied` flag is
+/// In Wavyte v0.2.0, frames are **premultiplied alpha** by default. The `premultiplied` flag is
 /// included to make this explicit at API boundaries.
 #[derive(Clone, Debug)]
 pub struct FrameRGBA {
@@ -27,20 +27,22 @@ pub trait RenderBackend: PassBackend {
     fn render_plan(
         &mut self,
         plan: &RenderPlan,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<FrameRGBA> {
         execute_plan(self, plan, assets)
+    }
+
+    fn worker_render_settings(&self) -> Option<RenderSettings> {
+        None
     }
 }
 
 /// Available backend kinds.
 ///
 /// - `Cpu` is always available.
-/// - `Gpu` requires building the crate with `--features gpu`.
 #[derive(Clone, Copy, Debug)]
 pub enum BackendKind {
     Cpu,
-    Gpu,
 }
 
 /// Backend-agnostic settings.
@@ -53,7 +55,6 @@ pub struct RenderSettings {
 /// Create a rendering backend implementation.
 ///
 /// - `BackendKind::Cpu` is always available.
-/// - `BackendKind::Gpu` is only available when built with `--features gpu`.
 pub fn create_backend(
     kind: BackendKind,
     _settings: &RenderSettings,
@@ -62,20 +63,5 @@ pub fn create_backend(
         BackendKind::Cpu => Ok(Box::new(crate::render_cpu::CpuBackend::new(
             _settings.clone(),
         ))),
-        BackendKind::Gpu => {
-            #[cfg(feature = "gpu")]
-            {
-                Ok(Box::new(crate::render_vello::VelloBackend::new(
-                    _settings.clone(),
-                )?))
-            }
-            #[cfg(not(feature = "gpu"))]
-            {
-                let _ = _settings;
-                Err(crate::error::WavyteError::evaluation(
-                    "requested backend is not available (built without `gpu` feature)",
-                ))
-            }
-        }
     }
 }

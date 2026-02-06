@@ -2,8 +2,8 @@ mod cpu {
     use std::collections::BTreeMap;
 
     use wavyte::{
-        Anim, Asset, AssetCache, AssetId, BackendKind, BlendMode, Canvas, Clip, ClipProps,
-        Composition, FrameIndex, FrameRange, PathAsset, RenderSettings, Track, Transform2D,
+        Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, FrameIndex,
+        FrameRange, PathAsset, PreparedAssetStore, RenderSettings, Track, Transform2D,
         create_backend, render_frame,
     };
 
@@ -25,28 +25,8 @@ mod cpu {
         state
     }
 
-    struct NoAssets;
-    impl AssetCache for NoAssets {
-        fn id_for(&mut self, _asset: &Asset) -> wavyte::WavyteResult<AssetId> {
-            Err(wavyte::WavyteError::evaluation(
-                "no external assets in this test",
-            ))
-        }
-
-        fn get_or_load(&mut self, _asset: &Asset) -> wavyte::WavyteResult<wavyte::PreparedAsset> {
-            Err(wavyte::WavyteError::evaluation(
-                "no external assets in this test",
-            ))
-        }
-
-        fn get_or_load_by_id(
-            &mut self,
-            _id: AssetId,
-        ) -> wavyte::WavyteResult<wavyte::PreparedAsset> {
-            Err(wavyte::WavyteError::evaluation(
-                "no external assets in this test",
-            ))
-        }
+    fn store_for(comp: &Composition) -> PreparedAssetStore {
+        PreparedAssetStore::prepare(comp, ".").unwrap()
     }
 
     fn simple_path_comp() -> Composition {
@@ -69,6 +49,12 @@ mod cpu {
             tracks: vec![Track {
                 name: "main".to_string(),
                 z_base: 0,
+                layout_mode: wavyte::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: wavyte::Edges::default(),
+                layout_align_x: wavyte::LayoutAlignX::Start,
+                layout_align_y: wavyte::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "p0".to_string(),
@@ -115,6 +101,12 @@ mod cpu {
                 Track {
                     name: "bg".to_string(),
                     z_base: 0,
+                    layout_mode: wavyte::LayoutMode::Absolute,
+                    layout_gap_px: 0.0,
+                    layout_padding: wavyte::Edges::default(),
+                    layout_align_x: wavyte::LayoutAlignX::Start,
+                    layout_align_y: wavyte::LayoutAlignY::Start,
+                    layout_grid_columns: 2,
                     clips: vec![Clip {
                         id: "c0".to_string(),
                         asset: "p0".to_string(),
@@ -133,6 +125,12 @@ mod cpu {
                 Track {
                     name: "fg".to_string(),
                     z_base: 1,
+                    layout_mode: wavyte::LayoutMode::Absolute,
+                    layout_gap_px: 0.0,
+                    layout_padding: wavyte::Edges::default(),
+                    layout_align_x: wavyte::LayoutAlignX::Start,
+                    layout_align_y: wavyte::LayoutAlignY::Start,
+                    layout_grid_columns: 2,
                     clips: vec![Clip {
                         id: "c1".to_string(),
                         asset: "p1".to_string(),
@@ -161,10 +159,10 @@ mod cpu {
             clear_rgba: Some([0, 0, 0, 255]),
         };
         let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
-        let mut assets = NoAssets;
+        let assets = store_for(&comp);
 
-        let a = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
-        let b = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        let a = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
+        let b = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
 
         assert_eq!(a.width, 64);
         assert_eq!(a.height, 64);
@@ -181,9 +179,9 @@ mod cpu {
             clear_rgba: Some([0, 0, 0, 255]),
         };
         let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
-        let mut assets = NoAssets;
+        let assets = store_for(&comp);
 
-        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
         assert_eq!(frame.width, 64);
         assert_eq!(frame.height, 64);
         assert!(frame.premultiplied);

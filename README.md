@@ -1,70 +1,82 @@
-# wavyte (v0.1.0)
+# wavyte (v0.2.0)
 
 Programmatic video composition and rendering in Rust.
 
-Wavyte is a library-first engine that turns a **timeline composition** (JSON or a Rust builder DSL)
-into pixels via a deterministic pipeline:
+Wavyte is a library-first engine that turns a timeline composition (JSON or Rust DSL) into pixels
+through a deterministic pipeline:
 
-1. **Evaluate** the timeline at a frame index → visible clips in painter’s order
-2. **Compile** into a backend-agnostic **RenderPlan**
-3. **Render** the plan on the **CPU by default** (optional GPU backend)
-4. Optionally **encode MP4** by streaming frames to the system `ffmpeg` binary
+1. Evaluate timeline state for a frame.
+2. Compile to backend-agnostic `RenderPlan` IR.
+3. Execute passes on the CPU backend.
+4. Optionally encode MP4 through system `ffmpeg`.
 
-Wavyte v0.1.0 is deliberately scoped: it aims to be a solid compositing/rendering baseline that we
-can extend into a production-grade product over time.
+## What you get in v0.2
 
----
+- Immutable prepared asset store (`PreparedAssetStore`) with deterministic asset IDs.
+- CPU rendering backend (`vello_cpu`) with premultiplied RGBA semantics.
+- Track layout primitives: `Absolute`, `HStack`, `VStack`, `Grid`, `Center`.
+- Transition/effect pipeline (`crossfade`, `wipe`, `blur`, inline opacity/transform effects).
+- Chunked parallel rendering with optional static-frame elision.
+- Optional media decode/probe + audio mix/mux via `media-ffmpeg` feature.
 
-## Table of contents
+## Install and prerequisites
 
-- Getting started
-  - Prerequisites
-  - Run an example
-  - Minimal composition JSON (copy/paste)
-- CLI
-- Library usage (pipeline and API map)
-- Backends and features
-- Assets (paths, caching, determinism)
-- Rendering semantics (`RenderPlan`, premultiplied alpha)
-- MP4 encoding (`ffmpeg`)
-- Development and quality gate
-- License
+Rust:
 
----
+```bash
+rustc --version
+```
 
-## Getting started
-
-### Prerequisites
-
-PNG output works out of the box.
-
-MP4 output requires a working `ffmpeg` on `PATH`:
+MP4 rendering requires `ffmpeg` on `PATH`:
 
 ```bash
 ffmpeg -version
+ffprobe -version
 ```
 
-### Run an example (repo)
+## Quick start
 
-CPU is the default (no feature flags required):
+Run examples:
 
 ```bash
 cargo run --example render_crossfade_png
 cargo run --example render_blur_png
+cargo run --example render_remotion_hello_world_mp4
+cargo run --example render_aesthetic_motion_mp4
+cargo run --example render_aesthetic_fx_mp4
+cargo run --example render_aesthetic_layout_mp4
 ```
 
-MP4 example (requires `ffmpeg`):
+Full media/layout example (`media-ffmpeg` feature):
 
 ```bash
-cargo run --example render_to_mp4
+cargo run --features media-ffmpeg --example render_full_gamut_media_layout_mp4
 ```
 
-In this repo, examples write outputs into the repo-local `assets/` directory (intentionally untracked).
+Examples write outputs into repo-local `assets/`.
 
-### Minimal composition JSON (copy/paste)
+## CLI
 
-This JSON uses only an inlined `Path` asset (no external files), so you can render it immediately.
-Save it as `comp.json`:
+Render one PNG frame from JSON:
+
+```bash
+cargo run --bin wavyte -- frame --in comp.json --frame 0 --out out.png
+```
+
+Render MP4 from JSON:
+
+```bash
+cargo run --bin wavyte -- render --in comp.json --out out.mp4
+```
+
+Diagnostics:
+
+- `--dump-fonts`: resolved text family + font SHA-256.
+- `--dump-svg-fonts`: SVG text node count + loaded SVG font face count.
+
+## Minimal JSON composition
+
+Save as `comp.json`:
 
 ```json
 {
@@ -125,61 +137,27 @@ Save it as `comp.json`:
 }
 ```
 
-Render it via the CLI:
+Render:
 
 ```bash
 cargo run --bin wavyte -- frame --in comp.json --frame 0 --out out.png
 ```
-
----
-
-## CLI
-
-The repository builds a `wavyte` binary (always built; no feature flag).
-
-Render a single frame PNG from a JSON composition:
-
-```bash
-cargo run --bin wavyte -- frame --in comp.json --frame 0 --out out.png
-```
-
-Render an MP4 from a JSON composition (requires `ffmpeg`):
-
-```bash
-cargo run --bin wavyte -- render --in comp.json --out out.mp4
-```
-
-Backend selection:
-
-- CPU (default): omit `--backend` or pass `--backend cpu`
-- GPU: pass `--backend gpu` and build with `--features gpu`
-
-Implementation details (useful for debugging):
-
-- The CLI validates the composition before rendering.
-- The CLI uses `FsAssetCache` rooted at the directory containing the `--in` JSON file, so relative
-  asset paths resolve relative to the composition file.
-- Debug font resolution:
-  - `--dump-fonts` prints resolved text font family + SHA-256 of the font bytes.
-  - `--dump-svg-fonts` prints SVG text node count + SVG fontdb face count (system + project fonts).
-
----
 
 ## Library usage
 
-Wavyte’s core units are:
+Core units:
 
-- `Composition`: the timeline (assets + tracks + clips)
-- `Evaluator`: resolves per-frame visibility and clip properties
-- `RenderPlan`: backend-agnostic render IR
-- `RenderBackend`: executes the IR into pixels
-- `AssetCache`: isolates asset IO / decoding
+- `Composition`: timeline model.
+- `PreparedAssetStore`: immutable prepared assets.
+- `Evaluator`: per-frame visibility + resolved clip state.
+- `RenderPlan`: backend-agnostic pass graph.
+- `RenderBackend`: pass executor.
 
-The main convenience functions are in `src/pipeline.rs`:
+Main APIs (`src/render/pipeline.rs`):
 
-- `render_frame(&Composition, FrameIndex, backend, assets) -> FrameRGBA`
-- `render_frames(&Composition, FrameRange, backend, assets) -> impl Iterator<Item = FrameRGBA>`
-- `render_to_mp4(&Composition, out_path, RenderToMp4Opts, backend, assets) -> WavyteResult<()>`
+- `render_frame(...) -> FrameRGBA`
+- `render_frames_with_stats(...) -> (Vec<FrameRGBA>, RenderStats)`
+- `render_to_mp4_with_stats(...) -> RenderStats`
 
 Backend creation:
 
@@ -190,145 +168,97 @@ let settings = wavyte::RenderSettings {
 let mut backend = wavyte::create_backend(wavyte::BackendKind::Cpu, &settings)?;
 ```
 
-Asset IO is isolated:
-
-- Renderers never read from disk directly.
-- All external assets are loaded/decoded through `AssetCache` (use `FsAssetCache` for local files).
-
-For a guided tour of the public API, see the module map in “Project layout” below and the crate
-documentation on docs.rs.
-
----
-
-## Backends and features
-
-### CPU backend (default)
-
-Always available (no Cargo feature gate).
-
-- Raster engine: `vello_cpu`
-- SVG support: `usvg` parse + `resvg` rasterize (premultiplied RGBA8)
-
-### GPU backend (`--features gpu`)
-
-Optional. Enable it with:
-
-```bash
-cargo build --features gpu
-```
-
-GPU rendering uses:
-
-- `vello` for scene building and rendering
-- `wgpu` for device/queue/surface management and readback to RGBA8
-- SVG: `usvg` parse + `resvg` rasterize (premultiplied RGBA8), then draw as an image
-
-Note: v0.1.0 prioritizes SVG correctness (including SVG `<text>`) over GPU-native vector SVG. A
-future version can add an optional vector SVG pipeline once it can render text reliably.
-
-If you request `BackendKind::Gpu` without building with `--features gpu`,
-backend creation fails with a clear error.
-
----
-
-## Assets (paths, caching, determinism)
-
-External asset sources (image/svg/text font) must be:
-
-- relative paths (no leading `/`)
-- OS-agnostic (backslashes normalized to `/`)
-- free of `..`
-
-Wavyte enforces these rules during validation and asset key normalization.
-
-Caching:
-
-- `AssetId` is stable and derived from the normalized asset key + parameters.
-- `FsAssetCache` memoizes decoded/prepared assets so repeated frames do not re-decode.
-
-Important v0.1.0 rule:
-
-- Validation checks that asset sources are well-formed paths, but does not require that the files
-  exist. IO errors are reported when an asset is actually loaded during rendering.
-
----
-
 ## Rendering semantics
 
-### Premultiplied alpha (non-negotiable)
+Premultiplied alpha is the core pixel contract:
 
-Wavyte’s internal and output pixel convention is **premultiplied RGBA8**:
+- decoded images are premultiplied at ingest,
+- render outputs are premultiplied `FrameRGBA`,
+- compositing and blur assume premultiplied data.
 
-- decoded images are premultiplied at ingest
-- render backends output premultiplied RGBA8 `FrameRGBA`
-- compositing operations assume premultiplied alpha
+`RenderPlan` is the stable evaluate/compile/render boundary:
 
-If you integrate Wavyte with other systems, this is the single most important detail to preserve
-to avoid halos and incorrect blends.
+- `Pass::Scene`: draw operations into a surface,
+- `Pass::Offscreen`: post-effect pass (for example blur),
+- `Pass::Composite`: combine layer surfaces (`Over`, `Crossfade`, `Wipe`).
 
-### The `RenderPlan` (the backend boundary)
+## Assets and determinism
 
-`RenderPlan` is the stable boundary between “timeline evaluation” and “pixel backends”.
+Asset path rules:
 
-It is a sequence of passes over explicit render surfaces:
+- must be relative,
+- path separators normalized,
+- no `..` traversal.
 
-- `Pass::Scene(ScenePass)` draws ops into a surface
-- `Pass::Offscreen(OffscreenPass)` renders an effect into a new surface (e.g. blur)
-- `Pass::Composite(CompositePass)` combines surfaces into a destination (over/crossfade/wipe)
+Preparation behavior:
 
-This separation is what lets CPU and GPU backends share a single compiler.
+- `PreparedAssetStore::prepare` front-loads IO/decoding.
+- `AssetId` is deterministic from normalized asset key + params.
+- Renderers are IO-free and consume only prepared assets.
 
----
+## Parallel rendering
 
-## MP4 encoding and `ffmpeg`
+`RenderThreading` controls execution:
 
-Wavyte encodes MP4 by invoking the system `ffmpeg` binary and streaming raw RGBA frames to stdin.
-This is intentionally a **runtime prerequisite**, not a Cargo feature.
+- `parallel`: enable frame-parallel execution,
+- `chunk_size`: chunk granularity,
+- `threads`: optional fixed worker count,
+- `static_frame_elision`: fingerprint-based dedupe within chunk.
 
-Where this lives:
+Parallel mode uses worker-local CPU backends and preserves output frame order.
 
-- `src/encode_ffmpeg.rs`: `FfmpegEncoder` + config validation + process spawning
-- `src/pipeline.rs`: orchestration via `render_to_mp4`
+## Media and audio
 
-Behavior:
-
-- If `ffmpeg` is not found on `PATH`, encoding returns an error (no silent fallback).
-- Frames are rendered as premultiplied RGBA8. The encoder can “flatten” alpha over a background
-  color (see `EncodeConfig` / `default_mp4_config`).
-
----
-
-## Project layout (where to look)
-
-- `src/model.rs`: `Composition`, assets, tracks, clips, validation rules
-- `src/anim*.rs`: `Anim<T>` and helpers (keyframes, sequencing, easing)
-- `src/eval.rs`: `Evaluator` and the evaluated graph (visibility + resolved transforms)
-- `src/compile.rs`: backend-agnostic compiler into `RenderPlan`
-- `src/render.rs`: backend trait + backend selection (`BackendKind`, `create_backend`)
-- `src/render_cpu.rs`: CPU backend (vello_cpu + SVG via resvg)
-- `src/render_vello.rs`: GPU backend (vello + wgpu) (only when built with `--features gpu`)
-- `src/pipeline.rs`: `render_frame`, `render_frames`, `render_to_mp4`
-- `src/encode_ffmpeg.rs`: `ffmpeg` encoder process wrapper
-- `src/assets.rs` / `src/assets_decode.rs`: `AssetCache` + in-memory decoding
-- `src/bin/wavyte.rs`: the CLI
-
----
-
-## Development
-
-Minimum supported Rust version (MSRV): **Rust 1.93** (`edition = "2024"`).
-
-Quality gate:
+Enable with:
 
 ```bash
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets
-cargo test --all-targets --features gpu
+cargo run --features media-ffmpeg --example render_full_gamut_media_layout_mp4
 ```
 
----
+Capabilities:
+
+- video/audio trim, playback rate, volume, fades, mute,
+- video frame decode for rendering,
+- audio mix to `f32le` and mux during MP4 encode.
+
+## MP4 encoding
+
+Wavyte wraps system `ffmpeg` (`src/render/encode_ffmpeg.rs`):
+
+- raw RGBA frames streamed to stdin,
+- optional mixed audio input,
+- mp4 output (`libx264`, `yuv420p`, optional `aac`).
+
+If `ffmpeg` is unavailable, encoding fails explicitly.
+
+## Project layout
+
+- `src/composition/model.rs`: model + validation.
+- `src/composition/eval.rs`: evaluation.
+- `src/composition/layout.rs`: layout offsets.
+- `src/render/compile.rs`: render plan compiler.
+- `src/render/cpu.rs`: CPU backend.
+- `src/render/pipeline.rs`: orchestration APIs.
+- `src/render/encode_ffmpeg.rs`: encoder wrapper.
+- `src/assets/store.rs`: prepared asset store.
+- `src/assets/media.rs`: media probe/decode.
+- `src/audio/mix.rs`: audio manifest/mix.
+- `src/bin/wavyte.rs`: CLI.
+- `EXPLANATION.md`: exhaustive architecture deep dive.
+
+## Release readiness gate
+
+MSRV: Rust `1.93` (edition `2024`).
+
+Recommended gate:
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features --release
+cargo test --manifest-path bench/Cargo.toml --release
+```
 
 ## License
 
-This project is licensed under **AGPL-3.0-only**. See `LICENSE`.
+AGPL-3.0-only (`LICENSE`).

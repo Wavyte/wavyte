@@ -1,4 +1,4 @@
-//! # Wavyte guide (v0.1.0)
+//! # Wavyte guide (v0.2.0)
 //!
 //! This module is a standalone, end-to-end walkthrough of Wavyte’s architecture and public API.
 //! It is intentionally detailed so future phases (and external integrations) can build on a shared
@@ -17,7 +17,7 @@
 //! - [`RenderPlan`](crate::RenderPlan): backend-agnostic render IR for a single frame
 //! - [`RenderBackend`](crate::RenderBackend): executes a plan into pixels
 //! - [`FrameRGBA`](crate::FrameRGBA): the output pixels (RGBA8, premultiplied alpha)
-//! - [`AssetCache`](crate::AssetCache): the only place external IO is allowed
+//! - [`PreparedAssetStore`](crate::PreparedAssetStore): immutable prepared assets loaded up front
 //!
 //! The rendering pipeline is explicitly staged:
 //!
@@ -38,14 +38,14 @@
 //! To do that, renderer code never reaches into the filesystem (or network).
 //! Instead:
 //!
-//! - IO and decoding happen through [`AssetCache`](crate::AssetCache)
+//! - IO and decoding happen through [`PreparedAssetStore::prepare`](crate::PreparedAssetStore::prepare)
 //! - Renderers consume **prepared** assets:
 //!   - [`PreparedImage`](crate::PreparedImage) (premultiplied RGBA8)
 //!   - [`PreparedSvg`](crate::PreparedSvg) (`usvg::Tree`)
 //!   - [`PreparedText`](crate::PreparedText) (Parley layout + font bytes)
 //!
-//! The default implementation is [`FsAssetCache`](crate::FsAssetCache), which loads assets from a
-//! root directory and memoizes prepared results.
+//! Assets are loaded from a root directory via [`PreparedAssetStore::prepare`](crate::PreparedAssetStore::prepare)
+//! and shared immutably across compile/render steps.
 //!
 //! This design makes it straightforward to add a future asset cache that loads from:
 //! - an in-memory store
@@ -81,7 +81,7 @@
 //! ```rust,no_run
 //! use wavyte::{
 //!     Anim, Asset, BackendKind, Canvas, ClipBuilder, CompositionBuilder, Fps, FrameIndex,
-//!     FrameRange, FsAssetCache, PathAsset, RenderSettings, TrackBuilder, Transform2D, Vec2,
+//!     FrameRange, PathAsset, PreparedAssetStore, RenderSettings, TrackBuilder, Transform2D, Vec2,
 //!     create_backend, render_frame,
 //! };
 //!
@@ -121,9 +121,9 @@
 //!     clear_rgba: Some([18, 20, 28, 255]),
 //! };
 //! let mut backend = create_backend(BackendKind::Cpu, &settings)?;
-//! let mut assets = FsAssetCache::new("."); // only used for external assets (images/svg/text)
+//! let assets = PreparedAssetStore::prepare(&comp, ".")?;
 //!
-//! let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets)?;
+//! let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets)?;
 //! assert_eq!(frame.width, 512);
 //! assert_eq!(frame.height, 512);
 //! assert!(frame.premultiplied);
@@ -141,7 +141,7 @@
 //!
 //! ## Asset paths and validation
 //!
-//! For assets that reference external files (`Image`, `Svg`, `Text` font sources), v0.1.0 enforces:
+//! For assets that reference external files (`Image`, `Svg`, `Text` font sources), v0.2.0 enforces:
 //!
 //! - **relative** paths (no leading `/`)
 //! - OS-agnostic separators (`\` normalized to `/`)
@@ -150,7 +150,7 @@
 //! These checks happen during composition validation.
 //!
 //! Important: validation checks that the path is well-formed, but does not require that the file
-//! exists. IO errors are surfaced when an asset is actually loaded through [`AssetCache`].
+//! exists. IO errors are surfaced when the prepared store is built.
 //!
 //! ---
 //!
@@ -177,7 +177,7 @@
 //! - an ordered list of passes
 //! - draw operations and composites expressed in terms of stable asset IDs
 //!
-//! In v0.1.0, the plan uses these pass types:
+//! In v0.2.0, the plan uses these pass types:
 //!
 //! - [`ScenePass`](crate::ScenePass)
 //! - [`OffscreenPass`](crate::OffscreenPass) (currently used for blur)
@@ -192,7 +192,7 @@
 //! - a blend mode (currently only [`BlendMode::Normal`](crate::BlendMode))
 //! - an integer `z` used for ordering within a pass
 //!
-//! v0.1.0 draw ops:
+//! v0.2.0 draw ops:
 //!
 //! - `FillPath`:
 //!   - the local coordinate space is the SVG path coordinates parsed into a [`BezPath`](crate::BezPath)
@@ -202,17 +202,16 @@
 //!   - the `transform` maps pixel space into canvas space
 //! - `Svg`:
 //!   - the asset is a `usvg::Tree` (vector)
-//!   - v0.1.0: rasterized via `resvg` into a pixmap (premultiplied RGBA8), then drawn as an image
-//!   - note: we intentionally use the same rasterization path on CPU and GPU to ensure SVG `<text>`
-//!     correctness; a future version can add an optional vector SVG pipeline.
+//!   - v0.2.0: rasterized via `resvg` into a pixmap (premultiplied RGBA8), then drawn as an image
+//!   - note: we intentionally rasterize SVG via `resvg` for predictable SVG `<text>` correctness.
 //! - `Text`:
 //!   - the asset is a prepared Parley layout
 //!   - glyph positioning originates in the Parley layout coordinate space; the op `transform`
 //!     positions it in canvas space
 //!
-//! ### Effects and transitions (v0.1.0)
+//! ### Effects and transitions (v0.2.0)
 //!
-//! v0.1.0 supports a small set of effects and transitions, chosen specifically to validate the
+//! v0.2.0 supports a small set of effects and transitions, chosen specifically to validate the
 //! multi-pass architecture.
 //!
 //! - Effects:
@@ -228,7 +227,7 @@
 //!
 //! Why this exists:
 //!
-//! - CPU and GPU backends can share the same compilation logic
+//! - render backends can share the same compilation logic
 //! - tests can validate compiler output without involving a renderer
 //! - future effects/transitions can be expressed once in the IR
 //!
@@ -239,9 +238,9 @@
 //! A renderer implements [`RenderBackend`](crate::RenderBackend), which extends
 //! [`PassBackend`](crate::PassBackend) (the trait that knows how to execute individual passes).
 //!
-//! Backend selection is done via:
+//! Backend construction is done via:
 //!
-//! - [`BackendKind`](crate::BackendKind): `Cpu` or `Gpu`
+//! - [`BackendKind`](crate::BackendKind): `Cpu`
 //! - [`create_backend`](crate::create_backend): returns `Box<dyn RenderBackend>`
 //!
 //! CPU backend (always available):
@@ -249,13 +248,7 @@
 //! - powered by `vello_cpu`
 //! - SVG is supported by rasterizing `usvg::Tree` via `resvg` into an RGBA pixmap
 //!
-//! GPU backend (optional, requires `--features gpu`):
-//!
-//! - powered by `vello` and `wgpu`
-//! - SVG is supported by rasterizing `usvg::Tree` via `resvg` and drawing the resulting image
-//! - final output is read back to CPU memory as RGBA8
-//!
-//! The default backend is CPU; requesting GPU without enabling the feature returns an error.
+//! Wavyte v0.2 focuses on CPU rendering only.
 //!
 //! ---
 //!
