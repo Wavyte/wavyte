@@ -53,12 +53,21 @@ CPU is the default (no feature flags required):
 ```bash
 cargo run --example render_crossfade_png
 cargo run --example render_blur_png
+cargo run --example render_aesthetic_motion_mp4
+cargo run --example render_aesthetic_fx_mp4
+cargo run --example render_aesthetic_layout_mp4
 ```
 
 MP4 example (requires `ffmpeg`):
 
 ```bash
 cargo run --example render_to_mp4
+```
+
+Full media/layout gamut example (requires `ffmpeg` + `ffprobe` and `media-ffmpeg`):
+
+```bash
+cargo run --features media-ffmpeg --example render_full_gamut_media_layout_mp4
 ```
 
 In this repo, examples write outputs into the repo-local `assets/` directory (intentionally untracked).
