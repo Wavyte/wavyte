@@ -17,8 +17,8 @@ target
 claude_*.md
 !README.md
 
-# Not tracking assets directory
-assets
+# Not tracking top-level assets directory
+/assets
 
 # Bench harness (non-library) artifacts
 bench/Cargo.lock
