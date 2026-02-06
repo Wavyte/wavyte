@@ -76,7 +76,6 @@ struct RenderArgs {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum BackendChoice {
     Cpu,
-    Gpu,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -101,13 +100,6 @@ fn make_backend(
 ) -> anyhow::Result<Box<dyn wavyte::RenderBackend>> {
     let kind = match choice {
         BackendChoice::Cpu => wavyte::BackendKind::Cpu,
-        BackendChoice::Gpu => {
-            if cfg!(feature = "gpu") {
-                wavyte::BackendKind::Gpu
-            } else {
-                anyhow::bail!("built without `gpu` feature")
-            }
-        }
     };
 
     Ok(wavyte::create_backend(kind, settings)?)

@@ -228,7 +228,7 @@
 //!
 //! Why this exists:
 //!
-//! - CPU and GPU backends can share the same compilation logic
+//! - render backends can share the same compilation logic
 //! - tests can validate compiler output without involving a renderer
 //! - future effects/transitions can be expressed once in the IR
 //!
@@ -239,9 +239,9 @@
 //! A renderer implements [`RenderBackend`](crate::RenderBackend), which extends
 //! [`PassBackend`](crate::PassBackend) (the trait that knows how to execute individual passes).
 //!
-//! Backend selection is done via:
+//! Backend construction is done via:
 //!
-//! - [`BackendKind`](crate::BackendKind): `Cpu` or `Gpu`
+//! - [`BackendKind`](crate::BackendKind): `Cpu`
 //! - [`create_backend`](crate::create_backend): returns `Box<dyn RenderBackend>`
 //!
 //! CPU backend (always available):
@@ -249,13 +249,7 @@
 //! - powered by `vello_cpu`
 //! - SVG is supported by rasterizing `usvg::Tree` via `resvg` into an RGBA pixmap
 //!
-//! GPU backend (optional, requires `--features gpu`):
-//!
-//! - powered by `vello` and `wgpu`
-//! - SVG is supported by rasterizing `usvg::Tree` via `resvg` and drawing the resulting image
-//! - final output is read back to CPU memory as RGBA8
-//!
-//! The default backend is CPU; requesting GPU without enabling the feature returns an error.
+//! Wavyte v0.2 focuses on CPU rendering only.
 //!
 //! ---
 //!

@@ -46,8 +46,6 @@ mod transitions;
 mod blur_cpu;
 mod composite_cpu;
 mod render_cpu;
-#[cfg(feature = "gpu")]
-mod render_vello;
 
 /// High-level, standalone documentation for Wavyte’s concepts and architecture.
 pub mod guide;
@@ -78,6 +76,7 @@ pub use model::{
 };
 pub use pipeline::{RenderToMp4Opts, render_frame, render_frames, render_to_mp4};
 pub use render::{BackendKind, FrameRGBA, RenderBackend, RenderSettings, create_backend};
+pub use render_cpu::CpuBackend;
 pub use render_passes::{PassBackend, execute_plan};
 pub use transitions::{TransitionKind, WipeDir, parse_transition};
 

@@ -42,7 +42,6 @@ struct SceneParams {
 #[derive(Clone, Copy, Debug)]
 enum Backend {
     Cpu,
-    Gpu,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -229,11 +228,10 @@ fn parse_args() -> anyhow::Result<BenchArgs> {
             "--backend" => {
                 let v = args
                     .next()
-                    .ok_or_else(|| anyhow::anyhow!("missing value for --backend (cpu|gpu)"))?;
+                    .ok_or_else(|| anyhow::anyhow!("missing value for --backend (cpu)"))?;
                 out.backend = match v.as_str() {
                     "cpu" => Backend::Cpu,
-                    "gpu" => Backend::Gpu,
-                    _ => anyhow::bail!("unknown --backend '{v}' (expected cpu|gpu)"),
+                    _ => anyhow::bail!("unknown --backend '{v}' (expected cpu)"),
                 };
             }
             "--keep-all" => out.keep_all_outputs = true,
@@ -258,7 +256,7 @@ Renders a 10s composition repeatedly and reports p50/p90/p99 for each stage.
 Usage:
   cargo run -q
   cargo run -q -- --repeats 100 --seconds 10 --fps 30
-  cargo run -q -- --backend gpu        (requires building this bench with --features gpu)
+  cargo run -q -- --backend cpu
 
 Args:
   --width N        (default 640; must be even for MP4)
@@ -268,7 +266,7 @@ Args:
   --warmup N       (default 1)
   --repeats N      (default 100)
   --blur-radius N  (default 0; 0 disables blur)
-  --backend cpu|gpu (default cpu)
+  --backend cpu (default cpu)
   --out-dir PATH   (default assets/bench)
   --keep-all       keep per-run outputs (otherwise overwrite the same file)
   --no-encode      render frames but do not spawn ffmpeg
@@ -514,13 +512,6 @@ fn run_once(
     };
     let kind = match args.backend {
         Backend::Cpu => wavyte::BackendKind::Cpu,
-        Backend::Gpu => {
-            if cfg!(feature = "gpu") {
-                wavyte::BackendKind::Gpu
-            } else {
-                anyhow::bail!("bench built without `--features gpu`")
-            }
-        }
     };
     let mut backend = wavyte::create_backend(kind, &settings)?;
     let backend_create = backend_create_t0.elapsed();

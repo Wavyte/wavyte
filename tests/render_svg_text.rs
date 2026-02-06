@@ -173,35 +173,4 @@ mod svg_text {
         let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
         assert!(frame.data.iter().any(|&b| b != 0));
     }
-
-    #[cfg(feature = "gpu")]
-    mod gpu {
-        use super::*;
-
-        #[test]
-        fn gpu_svg_text_renders_nonempty_or_skips_if_no_adapter() {
-            let comp = comp_with_svg_text();
-            let settings = RenderSettings {
-                clear_rgba: Some([0, 0, 0, 0]),
-            };
-            let mut backend = create_backend(BackendKind::Gpu, &settings).unwrap();
-            let mut assets = FsAssetCache::new("tests/data");
-
-            assert_svg_fixture_fontdb_contains_inconsolata(&mut assets, &comp);
-
-            let frame = match render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets) {
-                Ok(v) => v,
-                Err(e) if e.to_string().contains("no gpu adapter available") => return,
-                Err(e) => panic!("unexpected gpu render error: {e}"),
-            };
-
-            assert_eq!(frame.width, 512);
-            assert_eq!(frame.height, 192);
-            assert!(frame.premultiplied);
-            assert!(
-                frame.data.iter().any(|&b| b != 0),
-                "expected non-empty pixels; svg fixture contains only <text> on transparent background"
-            );
-        }
-    }
 }

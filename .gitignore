@@ -14,7 +14,7 @@ target
 **/mutants.out*/
 
 # Policy: do not git-track Markdown files (except README.md)
-*.md
+claude_*.md
 !README.md
 
 # Not tracking assets directory

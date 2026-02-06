@@ -11,15 +11,8 @@ use wavyte::{
 fn parse_backend() -> anyhow::Result<BackendKind> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
-        Some("cpu") => Ok(BackendKind::Cpu),
-        Some("gpu") => {
-            if cfg!(feature = "gpu") {
-                Ok(BackendKind::Gpu)
-            } else {
-                anyhow::bail!("built without `gpu` feature")
-            }
-        }
-        _ => Ok(BackendKind::Cpu),
+        Some("cpu") | None => Ok(BackendKind::Cpu),
+        Some(other) => anyhow::bail!("unknown backend '{other}', only 'cpu' is supported"),
     }
 }
 

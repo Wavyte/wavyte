@@ -173,7 +173,6 @@ fn parse_backend() -> Option<&'static str> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("cpu") => Some("cpu"),
-        Some("gpu") => Some("gpu"),
         _ => None,
     }
 }
@@ -195,13 +194,6 @@ fn try_main() -> anyhow::Result<()> {
 
     let kind = match parse_backend() {
         Some("cpu") | None => BackendKind::Cpu,
-        Some("gpu") => {
-            if cfg!(feature = "gpu") {
-                BackendKind::Gpu
-            } else {
-                anyhow::bail!("built without `gpu` feature")
-            }
-        }
         _ => unreachable!(),
     };
 

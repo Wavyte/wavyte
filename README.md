@@ -151,8 +151,7 @@ cargo run --bin wavyte -- render --in comp.json --out out.mp4
 
 Backend selection:
 
-- CPU (default): omit `--backend` or pass `--backend cpu`
-- GPU: pass `--backend gpu` and build with `--features gpu`
+- CPU only in v0.2 (`--backend cpu`)
 
 Implementation details (useful for debugging):
 
@@ -200,34 +199,14 @@ documentation on docs.rs.
 
 ---
 
-## Backends and features
+## Backends
 
 ### CPU backend (default)
 
-Always available (no Cargo feature gate).
+Always available.
 
 - Raster engine: `vello_cpu`
 - SVG support: `usvg` parse + `resvg` rasterize (premultiplied RGBA8)
-
-### GPU backend (`--features gpu`)
-
-Optional. Enable it with:
-
-```bash
-cargo build --features gpu
-```
-
-GPU rendering uses:
-
-- `vello` for scene building and rendering
-- `wgpu` for device/queue/surface management and readback to RGBA8
-- SVG: `usvg` parse + `resvg` rasterize (premultiplied RGBA8), then draw as an image
-
-Note: v0.1.0 prioritizes SVG correctness (including SVG `<text>`) over GPU-native vector SVG. A
-future version can add an optional vector SVG pipeline once it can render text reliably.
-
-If you request `BackendKind::Gpu` without building with `--features gpu`,
-backend creation fails with a clear error.
 
 ---
 
@@ -306,7 +285,6 @@ Behavior:
 - `src/compile.rs`: backend-agnostic compiler into `RenderPlan`
 - `src/render.rs`: backend trait + backend selection (`BackendKind`, `create_backend`)
 - `src/render_cpu.rs`: CPU backend (vello_cpu + SVG via resvg)
-- `src/render_vello.rs`: GPU backend (vello + wgpu) (only when built with `--features gpu`)
 - `src/pipeline.rs`: `render_frame`, `render_frames`, `render_to_mp4`
 - `src/encode_ffmpeg.rs`: `ffmpeg` encoder process wrapper
 - `src/assets.rs` / `src/assets_decode.rs`: `AssetCache` + in-memory decoding
@@ -324,7 +302,6 @@ Quality gate:
 cargo fmt --all
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets
-cargo test --all-targets --features gpu
 ```
 
 ---

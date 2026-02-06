@@ -5,9 +5,8 @@ edition = "2024"
 rust-version = "1.93"
 publish = false
 
-[features]
-default = []
-gpu = ["wavyte/gpu"]
+[profile.dev]
+debug = 0
 
 [dependencies]
 anyhow = "1"

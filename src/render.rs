@@ -36,11 +36,9 @@ pub trait RenderBackend: PassBackend {
 /// Available backend kinds.
 ///
 /// - `Cpu` is always available.
-/// - `Gpu` requires building the crate with `--features gpu`.
 #[derive(Clone, Copy, Debug)]
 pub enum BackendKind {
     Cpu,
-    Gpu,
 }
 
 /// Backend-agnostic settings.
@@ -53,7 +51,6 @@ pub struct RenderSettings {
 /// Create a rendering backend implementation.
 ///
 /// - `BackendKind::Cpu` is always available.
-/// - `BackendKind::Gpu` is only available when built with `--features gpu`.
 pub fn create_backend(
     kind: BackendKind,
     _settings: &RenderSettings,
@@ -62,20 +59,5 @@ pub fn create_backend(
         BackendKind::Cpu => Ok(Box::new(crate::render_cpu::CpuBackend::new(
             _settings.clone(),
         ))),
-        BackendKind::Gpu => {
-            #[cfg(feature = "gpu")]
-            {
-                Ok(Box::new(crate::render_vello::VelloBackend::new(
-                    _settings.clone(),
-                )?))
-            }
-            #[cfg(not(feature = "gpu"))]
-            {
-                let _ = _settings;
-                Err(crate::error::WavyteError::evaluation(
-                    "requested backend is not available (built without `gpu` feature)",
-                ))
-            }
-        }
     }
 }
