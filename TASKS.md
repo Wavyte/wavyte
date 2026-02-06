@@ -94,7 +94,7 @@ When a commit changes media/feature flags, run the relevant subset explicitly an
 
 ### Phase B: Immutable Prepared Asset Store
 
-7. `v0.2.0 - introduce prepared_asset_store core types`
+- [x] `v0.2.0 - introduce prepared_asset_store core types`
 - Add `src/asset_store.rs` with:
   - `PreparedAssetStore`
   - `PreparedAsset::{Image,Svg,Text,Path}`
@@ -102,22 +102,22 @@ When a commit changes media/feature flags, run the relevant subset explicitly an
   - `AssetId`, `AssetKey`, normalized-path + hash logic (migrated from `assets.rs`).
 - Acceptance: module compiles with unit tests for hashing/path normalization.
 
-8. `v0.2.0 - implement eager prepare pipeline for image svg text path`
+- [x] `v0.2.0 - implement eager prepare pipeline for image svg text path`
 - Add `PreparedAssetStore::prepare(comp, root)` single-threaded preload.
 - Preserve current SVG font policy and custom font resolver behavior.
 - Acceptance: all current asset kinds except video/audio prepare successfully.
 
-9. `v0.2.0 - migrate compile to immutable asset lookup api`
+- [x] `v0.2.0 - migrate compile to immutable asset lookup api`
 - Change compile inputs from `&mut dyn AssetCache` to `&PreparedAssetStore`.
 - Stop per-frame path parsing by using `PreparedPath`.
 - Acceptance: compile tests updated and green.
 
-10. `v0.2.0 - migrate cpu renderer and pass executor to prepared store`
+- [x] `v0.2.0 - migrate cpu renderer and pass executor to prepared store`
 - `render_cpu.rs` and `render_passes.rs` read from `PreparedAssetStore` only.
 - Remove mutable loading calls from hot path.
 - Acceptance: render tests remain deterministic and pass.
 
-11. `v0.2.0 - delete legacy asset_cache trait and fs cache implementation`
+- [x] `v0.2.0 - delete legacy asset_cache trait and fs cache implementation`
 - Remove `AssetCache` trait and `FsAssetCache` type.
 - Keep any reusable helper code moved under `asset_store.rs` or helper module.
 - Acceptance: no references to old cache trait remain.

@@ -8,26 +8,23 @@ use anyhow::Context;
 
 use crate::{
     assets_decode,
+    core::BezPath,
     error::{WavyteError, WavyteResult},
     model,
 };
 
-/// A decoded and prepared image in premultiplied RGBA8 format.
 #[derive(Clone, Debug)]
 pub struct PreparedImage {
     pub width: u32,
     pub height: u32,
-    /// Premultiplied RGBA8, row-major, tightly packed.
     pub rgba8_premul: Arc<Vec<u8>>,
 }
 
-/// A parsed SVG document (vector) as a `usvg::Tree`.
 #[derive(Clone, Debug)]
 pub struct PreparedSvg {
     pub tree: Arc<usvg::Tree>,
 }
 
-/// RGBA8 brush used by the text layout engine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextBrushRgba8 {
     pub r: u8,
@@ -36,10 +33,6 @@ pub struct TextBrushRgba8 {
     pub a: u8,
 }
 
-/// A prepared text asset: a Parley layout plus the font bytes used to build it.
-///
-/// Keeping `font_bytes` inside the prepared asset avoids renderer-side IO. Renderers can shape/draw
-/// glyphs using the provided bytes without knowing where they came from.
 #[derive(Clone)]
 pub struct PreparedText {
     pub layout: Arc<parley::Layout<TextBrushRgba8>>,
@@ -58,15 +51,18 @@ impl std::fmt::Debug for PreparedText {
 }
 
 #[derive(Clone, Debug)]
+pub struct PreparedPath {
+    pub path: BezPath,
+}
+
+#[derive(Clone, Debug)]
 pub enum PreparedAsset {
     Image(PreparedImage),
     Svg(PreparedSvg),
     Text(PreparedText),
+    Path(PreparedPath),
 }
 
-/// Stable identifier for a prepared asset.
-///
-/// In v0.1.0 this is a deterministic FNV-1a hash over a normalized [`AssetKey`] and parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AssetId(pub(crate) u64);
 
@@ -80,7 +76,6 @@ impl AssetId {
     }
 }
 
-/// Normalized asset key plus parameters used to derive an [`AssetId`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AssetKey {
     pub norm_path: String,
@@ -94,62 +89,104 @@ impl AssetKey {
     }
 }
 
-/// Abstraction over external asset IO and decoding.
-///
-/// Renderers and the compiler must not touch the filesystem or network directly. They only request
-/// assets through this trait, which returns already-prepared assets suitable for rendering.
-pub trait AssetCache {
-    /// Get a stable [`AssetId`] for an asset.
-    fn id_for(&mut self, asset: &model::Asset) -> WavyteResult<AssetId>;
-    /// Load and prepare an asset (memoized).
-    fn get_or_load(&mut self, asset: &model::Asset) -> WavyteResult<PreparedAsset>;
-    /// Load and prepare an asset by its stable [`AssetId`] (memoized).
-    fn get_or_load_by_id(&mut self, id: AssetId) -> WavyteResult<PreparedAsset>;
-}
-
-/// Filesystem-backed asset cache.
-///
-/// - Roots all asset loads at `root`
-/// - Normalizes relative paths into a stable form (OS-agnostic)
-/// - Memoizes decoded and prepared results across frames
-pub struct FsAssetCache {
+#[derive(Clone, Debug)]
+pub struct PreparedAssetStore {
     root: PathBuf,
-    keys_by_id: HashMap<AssetId, AssetKey>,
-    asset_by_id: HashMap<AssetId, model::Asset>,
-    prepared: HashMap<AssetId, PreparedAsset>,
-    decode_counts: HashMap<AssetId, u32>,
-    text_engine: TextLayoutEngine,
+    ids_by_key: HashMap<String, AssetId>,
+    assets_by_id: HashMap<AssetId, PreparedAsset>,
 }
 
-impl FsAssetCache {
-    /// Create a new filesystem-backed cache rooted at `root`.
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self {
-            root: root.into(),
-            keys_by_id: HashMap::new(),
-            asset_by_id: HashMap::new(),
-            prepared: HashMap::new(),
-            decode_counts: HashMap::new(),
-            text_engine: TextLayoutEngine::new(),
+impl PreparedAssetStore {
+    pub fn prepare(comp: &model::Composition, root: impl Into<PathBuf>) -> WavyteResult<Self> {
+        let root = root.into();
+        let mut out = Self {
+            root,
+            ids_by_key: HashMap::new(),
+            assets_by_id: HashMap::new(),
+        };
+
+        let mut text_engine = TextLayoutEngine::new();
+        for (asset_key, asset) in &comp.assets {
+            let (kind, key) = out.key_for(asset)?;
+            let id = Self::hash_id_for_key(kind, &key);
+
+            let prepared = match asset {
+                model::Asset::Image(_) => {
+                    let bytes = out.read_bytes(&key.norm_path)?;
+                    PreparedAsset::Image(assets_decode::decode_image(&bytes)?)
+                }
+                model::Asset::Svg(_) => {
+                    let bytes = out.read_bytes(&key.norm_path)?;
+                    PreparedAsset::Svg(parse_svg_with_options(&out.root, &key.norm_path, &bytes)?)
+                }
+                model::Asset::Text(a) => {
+                    let font_bytes = out.read_bytes(&key.norm_path)?;
+                    let brush = TextBrushRgba8 {
+                        r: a.color_rgba8[0],
+                        g: a.color_rgba8[1],
+                        b: a.color_rgba8[2],
+                        a: a.color_rgba8[3],
+                    };
+                    let layout = text_engine.layout_plain(
+                        &a.text,
+                        font_bytes.as_slice(),
+                        a.size_px,
+                        brush,
+                        a.max_width_px,
+                    )?;
+                    let family = text_engine
+                        .last_family_name()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    PreparedAsset::Text(PreparedText {
+                        layout: Arc::new(layout),
+                        font_bytes: Arc::new(font_bytes),
+                        font_family: family,
+                    })
+                }
+                model::Asset::Path(a) => PreparedAsset::Path(PreparedPath {
+                    path: parse_svg_path(&a.svg_path_d)?,
+                }),
+                model::Asset::Video(_) | model::Asset::Audio(_) => {
+                    return Err(WavyteError::validation(
+                        "video/audio assets are not supported by PreparedAssetStore yet",
+                    ));
+                }
+            };
+
+            out.ids_by_key.insert(asset_key.clone(), id);
+            out.assets_by_id.insert(id, prepared);
         }
+
+        Ok(out)
     }
 
-    pub fn decode_count(&self, id: AssetId) -> u32 {
-        self.decode_counts.get(&id).copied().unwrap_or(0)
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
-    pub fn key_for(&mut self, asset: &model::Asset) -> WavyteResult<(u8, AssetKey)> {
+    pub fn id_for_key(&self, key: &str) -> WavyteResult<AssetId> {
+        self.ids_by_key
+            .get(key)
+            .copied()
+            .ok_or_else(|| WavyteError::evaluation(format!("unknown asset key '{key}'")))
+    }
+
+    pub fn get(&self, id: AssetId) -> WavyteResult<&PreparedAsset> {
+        self.assets_by_id
+            .get(&id)
+            .ok_or_else(|| WavyteError::evaluation(format!("unknown AssetId {}", id.as_u64())))
+    }
+
+    fn key_for(&self, asset: &model::Asset) -> WavyteResult<(u8, AssetKey)> {
         match asset {
-            model::Asset::Image(a) => Ok((
-                b'I',
-                AssetKey::new(self.normalize_source(&a.source)?, vec![]),
-            )),
-            model::Asset::Svg(a) => Ok((
-                b'S',
-                AssetKey::new(self.normalize_source(&a.source)?, vec![]),
-            )),
+            model::Asset::Image(a) => {
+                Ok((b'I', AssetKey::new(normalize_rel_path(&a.source)?, vec![])))
+            }
+            model::Asset::Svg(a) => {
+                Ok((b'S', AssetKey::new(normalize_rel_path(&a.source)?, vec![])))
+            }
             model::Asset::Text(a) => {
-                let norm_path = self.normalize_source(&a.font_source)?;
+                let norm_path = normalize_rel_path(&a.font_source)?;
                 let mut params = vec![
                     ("text".to_string(), a.text.clone()),
                     (
@@ -172,17 +209,23 @@ impl FsAssetCache {
                 }
                 Ok((b'T', AssetKey::new(norm_path, params)))
             }
-            model::Asset::Video(_) | model::Asset::Audio(_) | model::Asset::Path(_) => Err(
-                WavyteError::validation("asset kind not yet supported by FsAssetCache in phase 3"),
-            ),
+            model::Asset::Path(a) => Ok((
+                b'P',
+                AssetKey::new(
+                    "inline:path".to_string(),
+                    vec![("svg_path_d".to_string(), a.svg_path_d.clone())],
+                ),
+            )),
+            model::Asset::Video(a) => {
+                Ok((b'V', AssetKey::new(normalize_rel_path(&a.source)?, vec![])))
+            }
+            model::Asset::Audio(a) => {
+                Ok((b'A', AssetKey::new(normalize_rel_path(&a.source)?, vec![])))
+            }
         }
     }
 
-    pub fn normalize_source(&self, source: &str) -> WavyteResult<String> {
-        normalize_rel_path(source)
-    }
-
-    fn id_for_key(kind_tag: u8, key: &AssetKey) -> AssetId {
+    fn hash_id_for_key(kind_tag: u8, key: &AssetKey) -> AssetId {
         let mut hasher = Fnv1a64::new();
         hasher.write_u8(kind_tag);
         hasher.write_bytes(key.norm_path.as_bytes());
@@ -202,70 +245,63 @@ impl FsAssetCache {
             .with_context(|| format!("read asset bytes from '{}'", path.display()))
             .map_err(WavyteError::from)
     }
+}
 
-    fn parse_svg_with_options(&self, norm_path: &str, bytes: &[u8]) -> WavyteResult<PreparedSvg> {
-        let abs = self.root.join(Path::new(norm_path));
-        let resources_dir = abs.parent().map(|p| p.to_path_buf());
+fn parse_svg_with_options(root: &Path, norm_path: &str, bytes: &[u8]) -> WavyteResult<PreparedSvg> {
+    let abs = root.join(Path::new(norm_path));
+    let resources_dir = abs.parent().map(|p| p.to_path_buf());
 
-        let fontdb = self.build_svg_fontdb(resources_dir.as_deref());
-        let font_resolver = make_svg_font_resolver();
-        let opts = usvg::Options {
-            resources_dir,
-            fontdb,
-            font_resolver,
-            ..Default::default()
-        };
+    let fontdb = build_svg_fontdb(root, resources_dir.as_deref());
+    let font_resolver = make_svg_font_resolver();
+    let opts = usvg::Options {
+        resources_dir,
+        fontdb,
+        font_resolver,
+        ..Default::default()
+    };
 
-        // Font correctness uplift will supply an explicit fontdb (system + project fonts).
-        let tree = usvg::Tree::from_data(bytes, &opts).with_context(|| "parse svg tree")?;
-        Ok(PreparedSvg {
-            tree: Arc::new(tree),
-        })
+    let tree = usvg::Tree::from_data(bytes, &opts).with_context(|| "parse svg tree")?;
+    Ok(PreparedSvg {
+        tree: Arc::new(tree),
+    })
+}
+
+fn build_svg_fontdb(
+    root: &Path,
+    resources_dir: Option<&Path>,
+) -> std::sync::Arc<usvg::fontdb::Database> {
+    let mut db = usvg::fontdb::Database::new();
+    db.load_system_fonts();
+
+    load_fonts_from_dir(&mut db, &root.join("fonts"));
+    load_fonts_from_dir(&mut db, &root.join("assets"));
+
+    if let Some(dir) = resources_dir {
+        load_fonts_from_dir(&mut db, dir);
+        load_fonts_from_dir(&mut db, &dir.join("fonts"));
     }
 
-    fn build_svg_fontdb(
-        &self,
-        resources_dir: Option<&Path>,
-    ) -> std::sync::Arc<usvg::fontdb::Database> {
-        let mut db = usvg::fontdb::Database::new();
+    std::sync::Arc::new(db)
+}
 
-        // System fonts ON (policy): best-effort; failures should not break rendering if project fonts exist.
-        db.load_system_fonts();
+fn load_fonts_from_dir(db: &mut usvg::fontdb::Database, dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
 
-        // Project fonts ON (policy): load fonts from `<root>/fonts` and `<root>/assets` (bounded, non-recursive).
-        self.load_fonts_from_dir(&mut db, &self.root.join("fonts"));
-        self.load_fonts_from_dir(&mut db, &self.root.join("assets"));
-
-        // Also scan the SVG's own directory and a `fonts/` subdir next to it (for compositions that bundle fonts
-        // alongside SVGs).
-        if let Some(dir) = resources_dir {
-            self.load_fonts_from_dir(&mut db, dir);
-            self.load_fonts_from_dir(&mut db, &dir.join("fonts"));
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
         }
-
-        std::sync::Arc::new(db)
-    }
-
-    fn load_fonts_from_dir(&self, db: &mut usvg::fontdb::Database, dir: &Path) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
+        let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+            continue;
         };
-        for entry in rd.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            let ext = ext.to_ascii_lowercase();
-            if ext != "ttf" && ext != "otf" && ext != "ttc" {
-                continue;
-            }
-
-            // Ignore individual font load failures; partial success is better than hard error.
-            let _ = db.load_font_file(&path);
+        let ext = ext.to_ascii_lowercase();
+        if ext != "ttf" && ext != "otf" && ext != "ttc" {
+            continue;
         }
+        let _ = db.load_font_file(&path);
     }
 }
 
@@ -286,8 +322,6 @@ fn make_svg_font_resolver() -> usvg::FontResolver<'static> {
                 });
             }
 
-            // Be more permissive than `usvg` defaults: try sans-serif and serif fallbacks,
-            // and if that still fails, pick any available face rather than dropping the text node.
             families.push(usvg::fontdb::Family::SansSerif);
             families.push(usvg::fontdb::Family::Serif);
             families.push(usvg::fontdb::Family::Monospace);
@@ -320,90 +354,13 @@ fn make_svg_font_resolver() -> usvg::FontResolver<'static> {
             if let Some(id) = fontdb.query(&query) {
                 return Some(id);
             }
-
-            // Last-ditch fallback: any face at all (ensures `<text>` nodes are not silently dropped).
             fontdb.faces().next().map(|f| f.id)
         }),
         select_fallback: FontResolver::default_fallback_selector(),
     }
 }
 
-impl AssetCache for FsAssetCache {
-    fn id_for(&mut self, asset: &model::Asset) -> WavyteResult<AssetId> {
-        let (kind, key) = self.key_for(asset)?;
-        let id = Self::id_for_key(kind, &key);
-        self.keys_by_id.entry(id).or_insert(key);
-        self.asset_by_id.entry(id).or_insert_with(|| asset.clone());
-        Ok(id)
-    }
-
-    fn get_or_load(&mut self, asset: &model::Asset) -> WavyteResult<PreparedAsset> {
-        let (kind, key) = self.key_for(asset)?;
-        let id = Self::id_for_key(kind, &key);
-        self.keys_by_id.entry(id).or_insert_with(|| key.clone());
-        self.asset_by_id.entry(id).or_insert_with(|| asset.clone());
-
-        if let Some(p) = self.prepared.get(&id) {
-            return Ok(p.clone());
-        }
-
-        let prepared = match asset {
-            model::Asset::Image(_) => {
-                let bytes = self.read_bytes(&key.norm_path)?;
-                PreparedAsset::Image(assets_decode::decode_image(&bytes)?)
-            }
-            model::Asset::Svg(_) => {
-                let bytes = self.read_bytes(&key.norm_path)?;
-                PreparedAsset::Svg(self.parse_svg_with_options(&key.norm_path, &bytes)?)
-            }
-            model::Asset::Text(a) => {
-                let font_bytes = self.read_bytes(&key.norm_path)?;
-                let brush = TextBrushRgba8 {
-                    r: a.color_rgba8[0],
-                    g: a.color_rgba8[1],
-                    b: a.color_rgba8[2],
-                    a: a.color_rgba8[3],
-                };
-                let layout = self.text_engine.layout_plain(
-                    &a.text,
-                    font_bytes.as_slice(),
-                    a.size_px,
-                    brush,
-                    a.max_width_px,
-                )?;
-                let family = self
-                    .text_engine
-                    .last_family_name()
-                    .unwrap_or_else(|| "unknown".to_string());
-                PreparedAsset::Text(PreparedText {
-                    layout: Arc::new(layout),
-                    font_bytes: Arc::new(font_bytes),
-                    font_family: family,
-                })
-            }
-            model::Asset::Video(_) | model::Asset::Audio(_) | model::Asset::Path(_) => {
-                return Err(WavyteError::validation(
-                    "asset kind not yet supported by FsAssetCache in phase 3",
-                ));
-            }
-        };
-
-        *self.decode_counts.entry(id).or_insert(0) += 1;
-        self.prepared.insert(id, prepared.clone());
-        Ok(prepared)
-    }
-
-    fn get_or_load_by_id(&mut self, id: AssetId) -> WavyteResult<PreparedAsset> {
-        let asset = self
-            .asset_by_id
-            .get(&id)
-            .ok_or_else(|| WavyteError::evaluation("unknown AssetId (not registered in cache)"))?
-            .clone();
-        self.get_or_load(&asset)
-    }
-}
-
-fn normalize_rel_path(source: &str) -> WavyteResult<String> {
+pub fn normalize_rel_path(source: &str) -> WavyteResult<String> {
     let s = source.replace('\\', "/");
     if s.starts_with('/') {
         return Err(WavyteError::validation("asset paths must be relative"));
@@ -430,6 +387,17 @@ fn normalize_rel_path(source: &str) -> WavyteResult<String> {
     }
 
     Ok(out.join("/"))
+}
+
+fn parse_svg_path(d: &str) -> WavyteResult<BezPath> {
+    let d = d.trim();
+    if d.is_empty() {
+        return Err(WavyteError::validation(
+            "path asset svg_path_d must be non-empty",
+        ));
+    }
+
+    BezPath::from_svg(d).map_err(|e| WavyteError::validation(format!("invalid svg_path_d: {e}")))
 }
 
 struct Fnv1a64(u64);
@@ -539,6 +507,7 @@ impl TextLayoutEngine {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::io::Cursor;
 
     use super::*;
@@ -561,48 +530,41 @@ mod tests {
             ],
         );
 
-        let a = FsAssetCache::id_for_key(b'I', &key);
-        let b = FsAssetCache::id_for_key(b'I', &key);
+        let a = PreparedAssetStore::hash_id_for_key(b'I', &key);
+        let b = PreparedAssetStore::hash_id_for_key(b'I', &key);
         assert_eq!(a, b);
         assert_eq!(a.0, 0xa23b14b8777d9f73);
     }
 
     #[test]
-    fn cache_load_same_asset_only_decodes_once() {
-        let tmp = std::env::temp_dir().join(format!(
-            "wavyte_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
+    fn prepare_path_assets_without_external_io() {
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "p0".to_string(),
+            model::Asset::Path(model::PathAsset {
+                svg_path_d: "M0,0 L10,0 L10,10 Z".to_string(),
+            }),
+        );
 
-        let png_path = tmp.join("img.png");
-        let img = image::RgbaImage::from_raw(1, 1, vec![1u8, 2u8, 3u8, 255u8]).unwrap();
-        let mut buf = Vec::new();
-        image::DynamicImage::ImageRgba8(img)
-            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
-            .unwrap();
-        std::fs::write(&png_path, &buf).unwrap();
+        let comp = model::Composition {
+            fps: crate::Fps::new(30, 1).unwrap(),
+            canvas: crate::Canvas {
+                width: 64,
+                height: 64,
+            },
+            duration: crate::FrameIndex(1),
+            assets,
+            tracks: vec![],
+            seed: 1,
+        };
 
-        let mut cache = FsAssetCache::new(&tmp);
-        let asset = model::Asset::Image(model::ImageAsset {
-            source: "img.png".to_string(),
-        });
-        let id = cache.id_for(&asset).unwrap();
-        cache.get_or_load(&asset).unwrap();
-        cache.get_or_load(&asset).unwrap();
-        assert_eq!(cache.decode_count(id), 1);
-
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    #[test]
-    fn parley_brush_type_is_valid() {
-        fn assert_brush<B: parley::style::Brush>() {}
-        assert_brush::<TextBrushRgba8>();
+        let store = PreparedAssetStore::prepare(&comp, ".").unwrap();
+        let id = store.id_for_key("p0").unwrap();
+        let prepared = store.get(id).unwrap();
+        let PreparedAsset::Path(p) = prepared else {
+            panic!("expected prepared path");
+        };
+        assert!(!p.path.is_empty());
     }
 
     #[test]
@@ -629,5 +591,57 @@ mod tests {
             .unwrap();
 
         assert!(layout.lines().next().is_some());
+    }
+
+    #[test]
+    fn prepare_single_image_asset() {
+        let tmp = std::env::temp_dir().join(format!(
+            "wavyte_asset_store_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let png_path = tmp.join("img.png");
+        let img = image::RgbaImage::from_raw(1, 1, vec![1u8, 2u8, 3u8, 255u8]).unwrap();
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(&png_path, &buf).unwrap();
+
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "img".to_string(),
+            model::Asset::Image(model::ImageAsset {
+                source: "img.png".to_string(),
+            }),
+        );
+
+        let comp = model::Composition {
+            fps: crate::Fps::new(30, 1).unwrap(),
+            canvas: crate::Canvas {
+                width: 1,
+                height: 1,
+            },
+            duration: crate::FrameIndex(1),
+            assets,
+            tracks: vec![],
+            seed: 1,
+        };
+
+        let store = PreparedAssetStore::prepare(&comp, &tmp).unwrap();
+        let id = store.id_for_key("img").unwrap();
+        let prepared = store.get(id).unwrap();
+        let PreparedAsset::Image(p) = prepared else {
+            panic!("expected prepared image");
+        };
+        assert_eq!(p.width, 1);
+        assert_eq!(p.height, 1);
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

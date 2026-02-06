@@ -14,7 +14,7 @@
 //!
 //! - **No unsafe**: `unsafe` is forbidden in this crate.
 //! - **Deterministic-by-default**: evaluation/compilation are pure and stable for a given input.
-//! - **No IO in renderers**: external IO lives behind [`AssetCache`].
+//! - **No IO in renderers**: external IO is front-loaded in [`PreparedAssetStore`].
 //! - **Premultiplied RGBA8** end-to-end: renderers output premultiplied pixels.
 //!
 //! # Getting started
@@ -27,7 +27,7 @@ mod anim;
 mod anim_ease;
 mod anim_ops;
 mod anim_proc;
-mod assets;
+mod asset_store;
 mod assets_decode;
 mod compile;
 mod core;
@@ -53,9 +53,9 @@ pub mod guide;
 pub use anim::{Anim, InterpMode, Keyframe, Keyframes, LoopMode, SampleCtx};
 pub use anim_ease::Ease;
 pub use anim_ops::{delay, loop_, mix, reverse, sequence, speed, stagger};
-pub use assets::{
-    AssetCache, AssetId, AssetKey, FsAssetCache, PreparedAsset, PreparedImage, PreparedSvg,
-    PreparedText, TextBrushRgba8, TextLayoutEngine,
+pub use asset_store::{
+    AssetId, AssetKey, PreparedAsset, PreparedAssetStore, PreparedImage, PreparedPath, PreparedSvg,
+    PreparedText, TextBrushRgba8, TextLayoutEngine, normalize_rel_path,
 };
 pub use assets_decode::{decode_image, parse_svg};
 pub use compile::{

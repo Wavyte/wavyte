@@ -6,7 +6,6 @@ use std::{
 use anyhow::Context as _;
 use serde_json::json;
 use sha2::Digest as _;
-use wavyte::AssetCache as _;
 
 #[derive(Clone, Debug)]
 struct BenchArgs {
@@ -150,14 +149,17 @@ fn try_main() -> anyhow::Result<()> {
 }
 
 fn dump_font_diagnostics(comp: &wavyte::Composition, repo_root: &Path) -> anyhow::Result<()> {
-    let mut assets = wavyte::FsAssetCache::new(repo_root);
+    let assets = wavyte::PreparedAssetStore::prepare(comp, repo_root)?;
 
     eprintln!("font diagnostics:");
     for (key, asset) in &comp.assets {
         match asset {
             wavyte::Asset::Text(a) => {
+                let id = assets
+                    .id_for_key(key)
+                    .with_context(|| format!("resolve text asset id '{key}'"))?;
                 let prepared = assets
-                    .get_or_load(asset)
+                    .get(id)
                     .with_context(|| format!("load text asset '{key}'"))?;
                 let wavyte::PreparedAsset::Text(p) = prepared else {
                     anyhow::bail!("text asset '{key}' did not prepare as text (bug)");
@@ -168,8 +170,11 @@ fn dump_font_diagnostics(comp: &wavyte::Composition, repo_root: &Path) -> anyhow
                 eprintln!("    sha256:      {}", sha256_hex(&p.font_bytes));
             }
             wavyte::Asset::Svg(a) => {
+                let id = assets
+                    .id_for_key(key)
+                    .with_context(|| format!("resolve svg asset id '{key}'"))?;
                 let prepared = assets
-                    .get_or_load(asset)
+                    .get(id)
                     .with_context(|| format!("load svg asset '{key}'"))?;
                 let wavyte::PreparedAsset::Svg(p) = prepared else {
                     anyhow::bail!("svg asset '{key}' did not prepare as svg (bug)");
@@ -516,7 +521,7 @@ fn run_once(
     let mut backend = wavyte::create_backend(kind, &settings)?;
     let backend_create = backend_create_t0.elapsed();
 
-    let mut assets = wavyte::FsAssetCache::new(repo_root);
+    let assets = wavyte::PreparedAssetStore::prepare(comp, repo_root)?;
 
     let mut enc = if args.no_encode {
         None
@@ -551,11 +556,11 @@ fn run_once(
         m.eval_total += t0.elapsed();
 
         let t1 = Instant::now();
-        let plan = wavyte::compile_frame(comp, &eval, &mut assets)?;
+        let plan = wavyte::compile_frame(comp, &eval, &assets)?;
         m.compile_total += t1.elapsed();
 
         let t2 = Instant::now();
-        let frame = backend.render_plan(&plan, &mut assets)?;
+        let frame = backend.render_plan(&plan, &assets)?;
         m.render_total += t2.elapsed();
 
         if let Some((enc, _spawn)) = enc.as_mut() {

@@ -113,10 +113,10 @@ fn try_main() -> anyhow::Result<()> {
         clear_rgba: Some([18, 20, 28, 255]),
     };
     let mut backend = create_backend(parse_backend()?, &settings)?;
-    let mut assets = wavyte::FsAssetCache::new(".");
+    let assets = wavyte::PreparedAssetStore::prepare(&comp, ".")?;
 
     // Middle of the overlap between A (out) and B (in): should pair into Crossfade op.
-    let frame = render_frame(&comp, FrameIndex(7), backend.as_mut(), &mut assets)?;
+    let frame = render_frame(&comp, FrameIndex(7), backend.as_mut(), &assets)?;
 
     let out_dir = PathBuf::from("assets");
     std::fs::create_dir_all(&out_dir)?;

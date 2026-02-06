@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use wavyte::{
     Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, FrameIndex,
-    FrameRange, FsAssetCache, ImageAsset, PathAsset, RenderSettings, SvgAsset, TextAsset, Track,
-    Transform2D, create_backend, render_frame,
+    FrameRange, ImageAsset, PathAsset, RenderSettings, SvgAsset, TextAsset, Track, Transform2D,
+    create_backend, render_frame,
 };
 
 fn first_asset_path_with_ext(ext: &str) -> Option<String> {
@@ -198,8 +198,8 @@ fn try_main() -> anyhow::Result<()> {
     };
 
     let mut backend = create_backend(kind, &settings)?;
-    let mut assets = FsAssetCache::new(".");
-    let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets)?;
+    let assets = wavyte::PreparedAssetStore::prepare(&comp, ".")?;
+    let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets)?;
 
     let out_path = std::path::Path::new("target").join("render_one_frame.png");
     image::save_buffer_with_format(

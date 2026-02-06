@@ -1,5 +1,5 @@
 use crate::{
-    assets::AssetCache,
+    asset_store::PreparedAssetStore,
     compile::compile_frame,
     core::{FrameIndex, FrameRange},
     error::{WavyteError, WavyteResult},
@@ -23,7 +23,7 @@ pub fn render_frame(
     comp: &Composition,
     frame: FrameIndex,
     backend: &mut dyn RenderBackend,
-    assets: &mut dyn AssetCache,
+    assets: &PreparedAssetStore,
 ) -> WavyteResult<FrameRGBA> {
     let eval = Evaluator::eval_frame(comp, frame)?;
     let plan = compile_frame(comp, &eval, assets)?;
@@ -37,7 +37,7 @@ pub fn render_frames(
     comp: &Composition,
     range: FrameRange,
     backend: &mut dyn RenderBackend,
-    assets: &mut dyn AssetCache,
+    assets: &PreparedAssetStore,
 ) -> WavyteResult<Vec<FrameRGBA>> {
     if range.is_empty() {
         return Err(WavyteError::validation("render range must be non-empty"));
@@ -90,7 +90,7 @@ pub fn render_to_mp4(
     out_path: impl Into<std::path::PathBuf>,
     opts: RenderToMp4Opts,
     backend: &mut dyn RenderBackend,
-    assets: &mut dyn AssetCache,
+    assets: &PreparedAssetStore,
 ) -> WavyteResult<()> {
     if opts.range.end.0 > comp.duration.0 {
         return Err(WavyteError::validation(

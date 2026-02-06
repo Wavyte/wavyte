@@ -1,5 +1,5 @@
 use crate::{
-    assets::AssetCache,
+    asset_store::PreparedAssetStore,
     compile::{CompositePass, OffscreenPass, Pass, RenderPlan, ScenePass, SurfaceDesc, SurfaceId},
     error::{WavyteError, WavyteResult},
     render::FrameRGBA,
@@ -8,32 +8,32 @@ use crate::{
 pub trait PassBackend {
     fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()>;
 
-    fn exec_scene(&mut self, pass: &ScenePass, assets: &mut dyn AssetCache) -> WavyteResult<()>;
+    fn exec_scene(&mut self, pass: &ScenePass, assets: &PreparedAssetStore) -> WavyteResult<()>;
 
     fn exec_offscreen(
         &mut self,
         pass: &OffscreenPass,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<()>;
 
     fn exec_composite(
         &mut self,
         pass: &CompositePass,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<()>;
 
     fn readback_rgba8(
         &mut self,
         surface: SurfaceId,
         plan: &RenderPlan,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<FrameRGBA>;
 }
 
 pub fn execute_plan<B: PassBackend + ?Sized>(
     backend: &mut B,
     plan: &RenderPlan,
-    assets: &mut dyn AssetCache,
+    assets: &PreparedAssetStore,
 ) -> WavyteResult<FrameRGBA> {
     for (idx, desc) in plan.surfaces.iter().enumerate() {
         let id = SurfaceId(
@@ -58,11 +58,10 @@ pub fn execute_plan<B: PassBackend + ?Sized>(
 mod tests {
     use super::*;
     use crate::{
-        assets::{AssetId, PreparedAsset},
+        asset_store::PreparedAssetStore,
         compile::{CompositeOp, PixelFormat},
         core::{Canvas, Rgba8Premul},
         error::WavyteResult,
-        model::Asset,
     };
 
     #[derive(Default)]
@@ -79,7 +78,7 @@ mod tests {
         fn exec_scene(
             &mut self,
             _pass: &ScenePass,
-            _assets: &mut dyn AssetCache,
+            _assets: &PreparedAssetStore,
         ) -> WavyteResult<()> {
             self.calls.push("exec_scene");
             Ok(())
@@ -88,7 +87,7 @@ mod tests {
         fn exec_offscreen(
             &mut self,
             _pass: &OffscreenPass,
-            _assets: &mut dyn AssetCache,
+            _assets: &PreparedAssetStore,
         ) -> WavyteResult<()> {
             self.calls.push("exec_offscreen");
             Ok(())
@@ -97,7 +96,7 @@ mod tests {
         fn exec_composite(
             &mut self,
             _pass: &CompositePass,
-            _assets: &mut dyn AssetCache,
+            _assets: &PreparedAssetStore,
         ) -> WavyteResult<()> {
             self.calls.push("exec_composite");
             Ok(())
@@ -107,7 +106,7 @@ mod tests {
             &mut self,
             _surface: SurfaceId,
             plan: &RenderPlan,
-            _assets: &mut dyn AssetCache,
+            _assets: &PreparedAssetStore,
         ) -> WavyteResult<FrameRGBA> {
             self.calls.push("readback_rgba8");
             Ok(FrameRGBA {
@@ -116,21 +115,6 @@ mod tests {
                 data: vec![0; (plan.canvas.width * plan.canvas.height * 4) as usize],
                 premultiplied: true,
             })
-        }
-    }
-
-    struct NoAssets;
-    impl AssetCache for NoAssets {
-        fn id_for(&mut self, _asset: &Asset) -> WavyteResult<AssetId> {
-            Err(crate::WavyteError::evaluation("no assets in this test"))
-        }
-
-        fn get_or_load(&mut self, _asset: &Asset) -> WavyteResult<PreparedAsset> {
-            Err(crate::WavyteError::evaluation("no assets in this test"))
-        }
-
-        fn get_or_load_by_id(&mut self, _id: AssetId) -> WavyteResult<PreparedAsset> {
-            Err(crate::WavyteError::evaluation("no assets in this test"))
         }
     }
 
@@ -179,8 +163,19 @@ mod tests {
         };
 
         let mut backend = MockBackend::default();
-        let mut assets = NoAssets;
-        let out = execute_plan(&mut backend, &plan, &mut assets).unwrap();
+        let comp = crate::Composition {
+            fps: crate::Fps::new(30, 1).unwrap(),
+            canvas: crate::Canvas {
+                width: 1,
+                height: 1,
+            },
+            duration: crate::FrameIndex(1),
+            assets: std::collections::BTreeMap::new(),
+            tracks: vec![],
+            seed: 0,
+        };
+        let store = PreparedAssetStore::prepare(&comp, ".").unwrap();
+        let out = execute_plan(&mut backend, &plan, &store).unwrap();
         assert_eq!(out.width, 4);
         assert_eq!(out.height, 3);
         assert!(out.premultiplied);
@@ -225,8 +220,19 @@ mod tests {
         };
 
         let mut backend = MockBackend::default();
-        let mut assets = NoAssets;
-        let out = execute_plan(&mut backend, &plan, &mut assets).unwrap();
+        let comp = crate::Composition {
+            fps: crate::Fps::new(30, 1).unwrap(),
+            canvas: crate::Canvas {
+                width: 1,
+                height: 1,
+            },
+            duration: crate::FrameIndex(1),
+            assets: std::collections::BTreeMap::new(),
+            tracks: vec![],
+            seed: 0,
+        };
+        let store = PreparedAssetStore::prepare(&comp, ".").unwrap();
+        let out = execute_plan(&mut backend, &plan, &store).unwrap();
         assert_eq!(out.data.len(), 16);
     }
 }

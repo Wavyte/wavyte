@@ -1,9 +1,9 @@
 mod cpu_svg {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, fs};
 
     use wavyte::{
-        Anim, Asset, AssetCache, AssetId, BackendKind, BlendMode, Canvas, Clip, ClipProps,
-        Composition, FrameIndex, FrameRange, RenderSettings, SvgAsset, Track, Transform2D,
+        Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, FrameIndex,
+        FrameRange, PreparedAssetStore, RenderSettings, SvgAsset, Track, Transform2D,
         create_backend, render_frame,
     };
 
@@ -25,12 +25,12 @@ mod cpu_svg {
         state
     }
 
-    fn simple_svg_comp() -> Composition {
+    fn simple_svg_comp(source: &str) -> Composition {
         let mut assets = BTreeMap::new();
         assets.insert(
             "s0".to_string(),
             Asset::Svg(SvgAsset {
-                source: "ignored.svg".to_string(),
+                source: source.to_string(),
             }),
         );
 
@@ -64,72 +64,42 @@ mod cpu_svg {
         }
     }
 
-    struct InMemorySvg {
-        id: AssetId,
-        prepared: wavyte::PreparedAsset,
-    }
-
-    impl InMemorySvg {
-        fn new(svg_bytes: &[u8]) -> Self {
-            let prepared = wavyte::PreparedAsset::Svg(wavyte::parse_svg(svg_bytes).unwrap());
-            Self {
-                id: AssetId::from_u64(0x5356_475f_5445_5354), // "SVG_TEST"
-                prepared,
-            }
-        }
-    }
-
-    impl AssetCache for InMemorySvg {
-        fn id_for(&mut self, asset: &Asset) -> wavyte::WavyteResult<AssetId> {
-            match asset {
-                Asset::Svg(_) => Ok(self.id),
-                _ => Err(wavyte::WavyteError::evaluation(
-                    "unexpected asset kind in this test",
-                )),
-            }
-        }
-
-        fn get_or_load(&mut self, asset: &Asset) -> wavyte::WavyteResult<wavyte::PreparedAsset> {
-            match asset {
-                Asset::Svg(_) => Ok(self.prepared.clone()),
-                _ => Err(wavyte::WavyteError::evaluation(
-                    "unexpected asset kind in this test",
-                )),
-            }
-        }
-
-        fn get_or_load_by_id(
-            &mut self,
-            id: AssetId,
-        ) -> wavyte::WavyteResult<wavyte::PreparedAsset> {
-            if id != self.id {
-                return Err(wavyte::WavyteError::evaluation("unknown AssetId"));
-            }
-            Ok(self.prepared.clone())
-        }
-    }
-
     #[test]
     fn cpu_svg_render_is_deterministic_and_nonempty() {
-        let comp = simple_svg_comp();
+        let tmp = std::env::temp_dir().join(format!(
+            "wavyte_svg_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let svg_path = tmp.join("test.svg");
+        fs::write(
+            &svg_path,
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <rect x="0" y="0" width="64" height="64" fill="#ff00ff"/>
+</svg>"##,
+        )
+        .unwrap();
 
+        let comp = simple_svg_comp("test.svg");
+        let assets = PreparedAssetStore::prepare(&comp, &tmp).unwrap();
         let settings = RenderSettings {
             clear_rgba: Some([0, 0, 0, 0]),
         };
         let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
-        let mut assets = InMemorySvg::new(
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-  <rect x="0" y="0" width="64" height="64" fill="#ff00ff"/>
-</svg>"##,
-        );
 
-        let a = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
-        let b = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        let a = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
+        let b = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
 
         assert_eq!(a.width, 64);
         assert_eq!(a.height, 64);
         assert!(a.premultiplied);
         assert_eq!(digest_u64(&a.data), digest_u64(&b.data));
         assert!(a.data.iter().any(|&x| x != 0));
+
+        fs::remove_dir_all(&tmp).ok();
     }
 }

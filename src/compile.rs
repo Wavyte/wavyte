@@ -1,10 +1,10 @@
 use crate::{
-    assets::{AssetCache, AssetId},
+    asset_store::{AssetId, PreparedAsset, PreparedAssetStore},
     core::{Affine, BezPath, Canvas, Rgba8Premul},
-    error::{WavyteError, WavyteResult},
+    error::WavyteResult,
     eval::EvaluatedGraph,
     fx::{PassFx, normalize_effects, parse_effect},
-    model::{Asset, BlendMode, Composition, EffectInstance},
+    model::{BlendMode, Composition, EffectInstance},
     transitions::{TransitionKind, WipeDir, parse_transition_kind_params},
 };
 
@@ -132,7 +132,7 @@ pub enum DrawOp {
 pub fn compile_frame(
     comp: &Composition,
     eval: &EvaluatedGraph,
-    assets: &mut dyn AssetCache,
+    assets: &PreparedAssetStore,
 ) -> WavyteResult<RenderPlan> {
     #[derive(Clone, Debug)]
     struct Layer {
@@ -152,13 +152,6 @@ pub fn compile_frame(
     let mut layers = Vec::<Layer>::with_capacity(eval.nodes.len());
 
     for (idx, node) in eval.nodes.iter().enumerate() {
-        let Some(asset) = comp.assets.get(&node.asset) else {
-            return Err(WavyteError::evaluation(format!(
-                "evaluated node '{}' references missing asset key '{}'",
-                node.clip_id, node.asset
-            )));
-        };
-
         let mut parsed = Vec::with_capacity(node.effects.len());
         for e in &node.effects {
             let inst = EffectInstance {
@@ -179,53 +172,37 @@ pub fn compile_frame(
 
         let transform = node.transform * fx.inline.transform_post;
 
-        let op = match asset {
-            Asset::Path(a) => {
-                let path = parse_svg_path(&a.svg_path_d)?;
-                DrawOp::FillPath {
-                    path,
-                    transform,
-                    color: Rgba8Premul::from_straight_rgba(255, 255, 255, 255),
-                    opacity,
-                    blend: node.blend,
-                    z: node.z,
-                }
-            }
-            Asset::Image(_) => {
-                let id = assets.id_for(asset)?;
-                DrawOp::Image {
-                    asset: id,
-                    transform,
-                    opacity,
-                    blend: node.blend,
-                    z: node.z,
-                }
-            }
-            Asset::Svg(_) => {
-                let id = assets.id_for(asset)?;
-                DrawOp::Svg {
-                    asset: id,
-                    transform,
-                    opacity,
-                    blend: node.blend,
-                    z: node.z,
-                }
-            }
-            Asset::Text(_) => {
-                let id = assets.id_for(asset)?;
-                DrawOp::Text {
-                    asset: id,
-                    transform,
-                    opacity,
-                    blend: node.blend,
-                    z: node.z,
-                }
-            }
-            Asset::Video(_) | Asset::Audio(_) => {
-                return Err(WavyteError::evaluation(
-                    "video/audio rendering is not supported in v0.1.0 phase 4",
-                ));
-            }
+        let asset_id = assets.id_for_key(&node.asset)?;
+        let op = match assets.get(asset_id)? {
+            PreparedAsset::Path(a) => DrawOp::FillPath {
+                path: a.path.clone(),
+                transform,
+                color: Rgba8Premul::from_straight_rgba(255, 255, 255, 255),
+                opacity,
+                blend: node.blend,
+                z: node.z,
+            },
+            PreparedAsset::Image(_) => DrawOp::Image {
+                asset: asset_id,
+                transform,
+                opacity,
+                blend: node.blend,
+                z: node.z,
+            },
+            PreparedAsset::Svg(_) => DrawOp::Svg {
+                asset: asset_id,
+                transform,
+                opacity,
+                blend: node.blend,
+                z: node.z,
+            },
+            PreparedAsset::Text(_) => DrawOp::Text {
+                asset: asset_id,
+                transform,
+                opacity,
+                blend: node.blend,
+                z: node.z,
+            },
         };
 
         let surf_id = SurfaceId((surfaces.len()) as u32);
@@ -365,17 +342,6 @@ pub fn compile_frame(
     })
 }
 
-fn parse_svg_path(d: &str) -> WavyteResult<BezPath> {
-    let d = d.trim();
-    if d.is_empty() {
-        return Err(WavyteError::validation(
-            "path asset svg_path_d must be non-empty",
-        ));
-    }
-
-    BezPath::from_svg(d).map_err(|e| WavyteError::validation(format!("invalid svg_path_d: {e}")))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -384,6 +350,7 @@ mod tests {
     use crate::{
         anim::Anim,
         anim_ease::Ease,
+        asset_store::PreparedAssetStore,
         core::{Fps, FrameIndex, FrameRange, Transform2D},
         eval::Evaluator,
         model::{
@@ -391,22 +358,8 @@ mod tests {
         },
     };
 
-    struct NoAssets;
-    impl AssetCache for NoAssets {
-        fn id_for(&mut self, _asset: &Asset) -> WavyteResult<AssetId> {
-            Err(WavyteError::evaluation("no assets in this test"))
-        }
-
-        fn get_or_load(&mut self, _asset: &Asset) -> WavyteResult<crate::assets::PreparedAsset> {
-            Err(WavyteError::evaluation("no assets in this test"))
-        }
-
-        fn get_or_load_by_id(
-            &mut self,
-            _id: AssetId,
-        ) -> WavyteResult<crate::assets::PreparedAsset> {
-            Err(WavyteError::evaluation("no assets in this test"))
-        }
+    fn store_for(comp: &Composition) -> PreparedAssetStore {
+        PreparedAssetStore::prepare(comp, ".").expect("prepare asset store for test composition")
     }
 
     #[test]
@@ -454,7 +407,8 @@ mod tests {
         };
 
         let eval = Evaluator::eval_frame(&comp, FrameIndex(1)).unwrap();
-        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let store = store_for(&comp);
+        let plan = compile_frame(&comp, &eval, &store).unwrap();
         let Pass::Scene(scene) = &plan.passes[0] else {
             panic!("expected Scene pass");
         };
@@ -516,7 +470,8 @@ mod tests {
         };
 
         let eval = Evaluator::eval_frame(&comp, FrameIndex(0)).unwrap();
-        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let store = store_for(&comp);
+        let plan = compile_frame(&comp, &eval, &store).unwrap();
         let Pass::Scene(scene) = &plan.passes[0] else {
             panic!("expected Scene pass");
         };
@@ -576,7 +531,8 @@ mod tests {
         };
 
         let eval = Evaluator::eval_frame(&comp, FrameIndex(0)).unwrap();
-        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let store = store_for(&comp);
+        let plan = compile_frame(&comp, &eval, &store).unwrap();
 
         assert_eq!(plan.surfaces.len(), 3);
         assert_eq!(plan.final_surface, SurfaceId(0));
@@ -680,7 +636,8 @@ mod tests {
         };
 
         let eval = Evaluator::eval_frame(&comp, FrameIndex(8)).unwrap();
-        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let store = store_for(&comp);
+        let plan = compile_frame(&comp, &eval, &store).unwrap();
         let Pass::Composite(p) = plan.passes.last().unwrap() else {
             panic!("expected Composite pass");
         };
@@ -759,7 +716,8 @@ mod tests {
         };
 
         let eval = Evaluator::eval_frame(&comp, FrameIndex(8)).unwrap();
-        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let store = store_for(&comp);
+        let plan = compile_frame(&comp, &eval, &store).unwrap();
         let Pass::Composite(p) = plan.passes.last().unwrap() else {
             panic!("expected Composite pass");
         };
@@ -852,7 +810,8 @@ mod tests {
         };
 
         let eval = Evaluator::eval_frame(&comp, FrameIndex(8)).unwrap();
-        let plan = compile_frame(&comp, &eval, &mut NoAssets).unwrap();
+        let store = store_for(&comp);
+        let plan = compile_frame(&comp, &eval, &store).unwrap();
         let Pass::Composite(p) = plan.passes.last().unwrap() else {
             panic!("expected Composite pass");
         };

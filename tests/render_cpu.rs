@@ -2,8 +2,8 @@ mod cpu {
     use std::collections::BTreeMap;
 
     use wavyte::{
-        Anim, Asset, AssetCache, AssetId, BackendKind, BlendMode, Canvas, Clip, ClipProps,
-        Composition, FrameIndex, FrameRange, PathAsset, RenderSettings, Track, Transform2D,
+        Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, FrameIndex,
+        FrameRange, PathAsset, PreparedAssetStore, RenderSettings, Track, Transform2D,
         create_backend, render_frame,
     };
 
@@ -25,28 +25,8 @@ mod cpu {
         state
     }
 
-    struct NoAssets;
-    impl AssetCache for NoAssets {
-        fn id_for(&mut self, _asset: &Asset) -> wavyte::WavyteResult<AssetId> {
-            Err(wavyte::WavyteError::evaluation(
-                "no external assets in this test",
-            ))
-        }
-
-        fn get_or_load(&mut self, _asset: &Asset) -> wavyte::WavyteResult<wavyte::PreparedAsset> {
-            Err(wavyte::WavyteError::evaluation(
-                "no external assets in this test",
-            ))
-        }
-
-        fn get_or_load_by_id(
-            &mut self,
-            _id: AssetId,
-        ) -> wavyte::WavyteResult<wavyte::PreparedAsset> {
-            Err(wavyte::WavyteError::evaluation(
-                "no external assets in this test",
-            ))
-        }
+    fn store_for(comp: &Composition) -> PreparedAssetStore {
+        PreparedAssetStore::prepare(comp, ".").unwrap()
     }
 
     fn simple_path_comp() -> Composition {
@@ -161,10 +141,10 @@ mod cpu {
             clear_rgba: Some([0, 0, 0, 255]),
         };
         let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
-        let mut assets = NoAssets;
+        let assets = store_for(&comp);
 
-        let a = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
-        let b = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        let a = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
+        let b = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
 
         assert_eq!(a.width, 64);
         assert_eq!(a.height, 64);
@@ -181,9 +161,9 @@ mod cpu {
             clear_rgba: Some([0, 0, 0, 255]),
         };
         let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
-        let mut assets = NoAssets;
+        let assets = store_for(&comp);
 
-        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
         assert_eq!(frame.width, 64);
         assert_eq!(frame.height, 64);
         assert!(frame.premultiplied);

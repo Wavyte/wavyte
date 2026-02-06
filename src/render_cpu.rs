@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    assets::{AssetCache, AssetId, PreparedAsset},
+    asset_store::{AssetId, PreparedAsset, PreparedAssetStore},
     compile::{CompositeOp, DrawOp, SurfaceDesc, SurfaceId},
     error::{WavyteError, WavyteResult},
     render::{FrameRGBA, RenderBackend, RenderSettings},
@@ -73,7 +73,7 @@ impl PassBackend for CpuBackend {
     fn exec_scene(
         &mut self,
         pass: &crate::compile::ScenePass,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<()> {
         let mut surface = self.surfaces.remove(&pass.target).ok_or_else(|| {
             WavyteError::evaluation(format!(
@@ -99,7 +99,7 @@ impl PassBackend for CpuBackend {
     fn exec_offscreen(
         &mut self,
         pass: &crate::compile::OffscreenPass,
-        _assets: &mut dyn AssetCache,
+        _assets: &PreparedAssetStore,
     ) -> WavyteResult<()> {
         let mut output = self.surfaces.remove(&pass.output).ok_or_else(|| {
             WavyteError::evaluation(format!(
@@ -144,7 +144,7 @@ impl PassBackend for CpuBackend {
     fn exec_composite(
         &mut self,
         pass: &crate::compile::CompositePass,
-        _assets: &mut dyn AssetCache,
+        _assets: &PreparedAssetStore,
     ) -> WavyteResult<()> {
         let mut dst = self.surfaces.remove(&pass.target).ok_or_else(|| {
             WavyteError::evaluation(format!(
@@ -230,7 +230,7 @@ impl PassBackend for CpuBackend {
         &mut self,
         surface: SurfaceId,
         plan: &crate::compile::RenderPlan,
-        _assets: &mut dyn AssetCache,
+        _assets: &PreparedAssetStore,
     ) -> WavyteResult<FrameRGBA> {
         let s = self.surfaces.remove(&surface).ok_or_else(|| {
             WavyteError::evaluation(format!(
@@ -267,7 +267,7 @@ fn draw_op(
     backend: &mut CpuBackend,
     ctx: &mut vello_cpu::RenderContext,
     op: &DrawOp,
-    assets: &mut dyn AssetCache,
+    assets: &PreparedAssetStore,
 ) -> WavyteResult<()> {
     ctx.set_paint_transform(vello_cpu::kurbo::Affine::IDENTITY);
 
@@ -324,7 +324,7 @@ fn draw_op(
             blend: _,
             z: _,
         } => {
-            let prepared = assets.get_or_load_by_id(*asset)?;
+            let prepared = assets.get(*asset)?;
             let PreparedAsset::Text(t) = prepared else {
                 return Err(WavyteError::evaluation("AssetId is not a PreparedText"));
             };
@@ -467,13 +467,13 @@ impl CpuBackend {
     fn image_paint_for(
         &mut self,
         id: AssetId,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<vello_cpu::Image> {
         if let Some(paint) = self.image_cache.get(&id) {
             return Ok(paint.clone());
         }
 
-        let prepared = assets.get_or_load_by_id(id)?;
+        let prepared = assets.get(id)?;
         let PreparedAsset::Image(img) = prepared else {
             return Err(WavyteError::evaluation("AssetId is not a PreparedImage"));
         };
@@ -492,13 +492,13 @@ impl CpuBackend {
     fn font_for_text_asset(
         &mut self,
         id: AssetId,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<vello_cpu::peniko::FontData> {
         if let Some(font) = self.font_cache.get(&id) {
             return Ok(font.clone());
         }
 
-        let prepared = assets.get_or_load_by_id(id)?;
+        let prepared = assets.get(id)?;
         let PreparedAsset::Text(t) = prepared else {
             return Err(WavyteError::evaluation("AssetId is not a PreparedText"));
         };
@@ -513,9 +513,9 @@ impl CpuBackend {
         &mut self,
         id: AssetId,
         transform: crate::core::Affine,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<(vello_cpu::Image, f64, f64, crate::core::Affine)> {
-        let prepared = assets.get_or_load_by_id(id)?;
+        let prepared = assets.get(id)?;
         let PreparedAsset::Svg(svg) = prepared else {
             return Err(WavyteError::evaluation("AssetId is not a PreparedSvg"));
         };

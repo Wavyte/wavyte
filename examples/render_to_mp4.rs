@@ -117,10 +117,10 @@ fn try_main() -> anyhow::Result<()> {
         clear_rgba: Some([18, 20, 28, 255]),
     };
     let mut backend = create_backend(parse_backend()?, &settings)?;
-    let mut assets = wavyte::FsAssetCache::new(".");
+    let assets = wavyte::PreparedAssetStore::prepare(&comp, ".")?;
 
     // Write a single frame PNG for quick sanity checking.
-    let frame = render_frame(&comp, FrameIndex(45), backend.as_mut(), &mut assets)?;
+    let frame = render_frame(&comp, FrameIndex(45), backend.as_mut(), &assets)?;
     image::save_buffer_with_format(
         &out_png,
         &frame.data,
@@ -140,7 +140,7 @@ fn try_main() -> anyhow::Result<()> {
             overwrite: true,
         },
         backend.as_mut(),
-        &mut assets,
+        &assets,
     )?;
 
     eprintln!("wrote {}", out_png.display());

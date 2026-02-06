@@ -1,5 +1,5 @@
 use crate::{
-    assets::AssetCache,
+    asset_store::PreparedAssetStore,
     compile::RenderPlan,
     error::WavyteResult,
     render_passes::{PassBackend, execute_plan},
@@ -27,7 +27,7 @@ pub trait RenderBackend: PassBackend {
     fn render_plan(
         &mut self,
         plan: &RenderPlan,
-        assets: &mut dyn AssetCache,
+        assets: &PreparedAssetStore,
     ) -> WavyteResult<FrameRGBA> {
         execute_plan(self, plan, assets)
     }

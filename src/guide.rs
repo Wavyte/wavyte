@@ -17,7 +17,7 @@
 //! - [`RenderPlan`](crate::RenderPlan): backend-agnostic render IR for a single frame
 //! - [`RenderBackend`](crate::RenderBackend): executes a plan into pixels
 //! - [`FrameRGBA`](crate::FrameRGBA): the output pixels (RGBA8, premultiplied alpha)
-//! - [`AssetCache`](crate::AssetCache): the only place external IO is allowed
+//! - [`PreparedAssetStore`](crate::PreparedAssetStore): immutable prepared assets loaded up front
 //!
 //! The rendering pipeline is explicitly staged:
 //!
@@ -38,14 +38,14 @@
 //! To do that, renderer code never reaches into the filesystem (or network).
 //! Instead:
 //!
-//! - IO and decoding happen through [`AssetCache`](crate::AssetCache)
+//! - IO and decoding happen through [`PreparedAssetStore::prepare`](crate::PreparedAssetStore::prepare)
 //! - Renderers consume **prepared** assets:
 //!   - [`PreparedImage`](crate::PreparedImage) (premultiplied RGBA8)
 //!   - [`PreparedSvg`](crate::PreparedSvg) (`usvg::Tree`)
 //!   - [`PreparedText`](crate::PreparedText) (Parley layout + font bytes)
 //!
-//! The default implementation is [`FsAssetCache`](crate::FsAssetCache), which loads assets from a
-//! root directory and memoizes prepared results.
+//! Assets are loaded from a root directory via [`PreparedAssetStore::prepare`](crate::PreparedAssetStore::prepare)
+//! and shared immutably across compile/render steps.
 //!
 //! This design makes it straightforward to add a future asset cache that loads from:
 //! - an in-memory store
@@ -81,7 +81,7 @@
 //! ```rust,no_run
 //! use wavyte::{
 //!     Anim, Asset, BackendKind, Canvas, ClipBuilder, CompositionBuilder, Fps, FrameIndex,
-//!     FrameRange, FsAssetCache, PathAsset, RenderSettings, TrackBuilder, Transform2D, Vec2,
+//!     FrameRange, PathAsset, PreparedAssetStore, RenderSettings, TrackBuilder, Transform2D, Vec2,
 //!     create_backend, render_frame,
 //! };
 //!
@@ -121,9 +121,9 @@
 //!     clear_rgba: Some([18, 20, 28, 255]),
 //! };
 //! let mut backend = create_backend(BackendKind::Cpu, &settings)?;
-//! let mut assets = FsAssetCache::new("."); // only used for external assets (images/svg/text)
+//! let assets = PreparedAssetStore::prepare(&comp, ".")?;
 //!
-//! let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets)?;
+//! let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets)?;
 //! assert_eq!(frame.width, 512);
 //! assert_eq!(frame.height, 512);
 //! assert!(frame.premultiplied);
@@ -150,7 +150,7 @@
 //! These checks happen during composition validation.
 //!
 //! Important: validation checks that the path is well-formed, but does not require that the file
-//! exists. IO errors are surfaced when an asset is actually loaded through [`AssetCache`].
+//! exists. IO errors are surfaced when the prepared store is built.
 //!
 //! ---
 //!

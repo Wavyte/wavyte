@@ -3,8 +3,8 @@ mod svg_text {
 
     use usvg::Node;
     use wavyte::{
-        Anim, Asset, AssetCache as _, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition,
-        FrameIndex, FrameRange, FsAssetCache, RenderSettings, SvgAsset, Track, Transform2D, Vec2,
+        Anim, Asset, BackendKind, BlendMode, Canvas, Clip, ClipProps, Composition, FrameIndex,
+        FrameRange, PreparedAssetStore, RenderSettings, SvgAsset, Track, Transform2D, Vec2,
         create_backend, render_frame,
     };
 
@@ -106,14 +106,9 @@ mod svg_text {
         }
     }
 
-    fn assert_svg_fixture_fontdb_contains_inconsolata(
-        assets: &mut FsAssetCache,
-        comp: &Composition,
-    ) {
-        let Some(asset) = comp.assets.get("s0") else {
-            panic!("missing svg asset 's0' in test composition");
-        };
-        let prepared = assets.get_or_load(asset).unwrap();
+    fn assert_svg_fixture_fontdb_contains_inconsolata(assets: &PreparedAssetStore) {
+        let id = assets.id_for_key("s0").unwrap();
+        let prepared = assets.get(id).unwrap();
         let wavyte::PreparedAsset::Svg(p) = prepared else {
             panic!("expected prepared svg asset");
         };
@@ -136,11 +131,11 @@ mod svg_text {
             clear_rgba: Some([0, 0, 0, 0]),
         };
         let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
-        let mut assets = FsAssetCache::new("tests/data");
+        let assets = PreparedAssetStore::prepare(&comp, "tests/data").unwrap();
 
-        assert_svg_fixture_fontdb_contains_inconsolata(&mut assets, &comp);
+        assert_svg_fixture_fontdb_contains_inconsolata(&assets);
 
-        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
         assert_eq!(frame.width, 512);
         assert_eq!(frame.height, 192);
         assert!(frame.premultiplied);
@@ -157,20 +152,18 @@ mod svg_text {
             clear_rgba: Some([0, 0, 0, 0]),
         };
         let mut backend = create_backend(BackendKind::Cpu, &settings).unwrap();
-        let mut assets = FsAssetCache::new("tests/data");
+        let assets = PreparedAssetStore::prepare(&comp, "tests/data").unwrap();
 
         // The fixture references nonexistent family names. This should still render text by falling
         // back to any available face (vendored font in tests/data/fonts).
-        let Some(asset) = comp.assets.get("s0") else {
-            panic!("missing svg asset 's0' in test composition");
-        };
-        let prepared = assets.get_or_load(asset).unwrap();
+        let id = assets.id_for_key("s0").unwrap();
+        let prepared = assets.get(id).unwrap();
         let wavyte::PreparedAsset::Svg(p) = prepared else {
             panic!("expected prepared svg asset");
         };
         assert_eq!(count_text_nodes(p.tree.root()), 1);
 
-        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &mut assets).unwrap();
+        let frame = render_frame(&comp, FrameIndex(0), backend.as_mut(), &assets).unwrap();
         assert!(frame.data.iter().any(|&b| b != 0));
     }
 }

@@ -105,7 +105,7 @@ fn try_main() -> anyhow::Result<()> {
         clear_rgba: Some([18, 20, 28, 255]),
     };
     let mut backend = create_backend(parse_backend()?, &settings)?;
-    let mut assets = wavyte::FsAssetCache::new(".");
+    let assets = wavyte::PreparedAssetStore::prepare(&comp, ".")?;
 
     let out_dir = PathBuf::from("assets");
     std::fs::create_dir_all(&out_dir)?;
@@ -120,7 +120,7 @@ fn try_main() -> anyhow::Result<()> {
             overwrite: true,
         },
         backend.as_mut(),
-        &mut assets,
+        &assets,
     )?;
 
     eprintln!("wrote {}", out_mp4.display());
