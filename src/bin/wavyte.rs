@@ -168,6 +168,7 @@ fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
         range: wavyte::FrameRange::new(wavyte::FrameIndex(0), comp.duration)?,
         bg_rgba: settings.clear_rgba.unwrap_or([0, 0, 0, 255]),
         overwrite: true,
+        threading: wavyte::RenderThreading::default(),
     };
 
     wavyte::render_to_mp4(&comp, &args.out, opts, backend.as_mut(), &assets)?;

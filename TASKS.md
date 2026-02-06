@@ -124,33 +124,33 @@ When a commit changes media/feature flags, run the relevant subset explicitly an
 
 ### Phase C: Parallel Chunked Rendering + Static Frame Elision
 
-12. `v0.2.0 - add rayon and render threading configuration`
+- [x] `v0.2.0 - add rayon and render threading configuration`
 - Add `rayon` dependency.
 - Add pipeline options for chunk sizing and thread count override.
 - Acceptance: defaults preserve current behavior when parallelism is disabled.
 
-13. `v0.2.0 - add frame fingerprint module and deterministic tests`
+- [x] `v0.2.0 - add frame fingerprint module and deterministic tests`
 - Add `src/fingerprint.rs` hashing evaluated frame state (and video timestamp once present).
 - Add collision-resistance sanity tests and determinism tests.
 - Acceptance: stable fingerprints across repeat runs.
 
-14. `v0.2.0 - implement worker-local cpu backend for parallel chunks`
+- [x] `v0.2.0 - implement worker-local cpu backend for parallel chunks`
 - Add worker-local state (backend + caches) for rayon workers.
 - Ensure no cross-thread mutable sharing in render hot path.
 - Acceptance: no `Mutex` contention in frame loop core.
 
-15. `v0.2.0 - implement chunked parallel render then sequential encode loop`
+- [x] `v0.2.0 - implement chunked parallel render then sequential encode loop`
 - Render unique frames in parallel per chunk.
 - Encode in strict frame order per chunk.
 - Keep encoder process persistent across chunks.
 - Acceptance: output frame ordering correctness validated.
 
-16. `v0.2.0 - add static frame elision in chunk pipeline`
+- [x] `v0.2.0 - add static frame elision in chunk pipeline`
 - Deduplicate by fingerprint within chunk.
 - Render first occurrence only, clone pixel buffers for duplicates.
 - Acceptance: new stat `frames_elided` and tests proving elision behavior.
 
-17. `v0.2.0 - add sequential-vs-parallel parity regression suite`
+- [x] `v0.2.0 - add sequential-vs-parallel parity regression suite`
 - Add integration tests comparing byte output:
   - sequential (1 thread)
   - parallel (N threads)

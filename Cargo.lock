@@ -1879,6 +1879,7 @@ dependencies = [
  "image",
  "kurbo",
  "parley",
+ "rayon",
  "resvg",
  "serde",
  "serde_json",

@@ -248,7 +248,11 @@ impl PassBackend for CpuBackend {
     }
 }
 
-impl RenderBackend for CpuBackend {}
+impl RenderBackend for CpuBackend {
+    fn worker_render_settings(&self) -> Option<RenderSettings> {
+        Some(self.settings.clone())
+    }
+}
 
 fn premul_rgba8(r: u8, g: u8, b: u8, a: u8) -> [u8; 4] {
     let af = (a as u16) + 1;

@@ -35,6 +35,7 @@ mod dsl;
 mod encode_ffmpeg;
 mod error;
 mod eval;
+mod fingerprint;
 mod fx;
 mod model;
 mod pipeline;
@@ -69,12 +70,16 @@ pub use core::{
 pub use dsl::{ClipBuilder, CompositionBuilder, TrackBuilder};
 pub use error::{WavyteError, WavyteResult};
 pub use eval::{EvaluatedClipNode, EvaluatedGraph, Evaluator, ResolvedEffect, ResolvedTransition};
+pub use fingerprint::{FrameFingerprint, fingerprint_eval};
 pub use fx::{Effect, FxPipeline, InlineFx, PassFx, normalize_effects, parse_effect};
 pub use model::{
     Asset, AudioAsset, BlendMode, Clip, ClipProps, Composition, EffectInstance, ImageAsset,
     PathAsset, SvgAsset, TextAsset, Track, TransitionSpec, VideoAsset,
 };
-pub use pipeline::{RenderToMp4Opts, render_frame, render_frames, render_to_mp4};
+pub use pipeline::{
+    RenderStats, RenderThreading, RenderToMp4Opts, render_frame, render_frames,
+    render_frames_with_stats, render_to_mp4, render_to_mp4_with_stats,
+};
 pub use render::{BackendKind, FrameRGBA, RenderBackend, RenderSettings, create_backend};
 pub use render_cpu::CpuBackend;
 pub use render_passes::{PassBackend, execute_plan};

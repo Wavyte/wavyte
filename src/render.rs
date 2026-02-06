@@ -31,6 +31,10 @@ pub trait RenderBackend: PassBackend {
     ) -> WavyteResult<FrameRGBA> {
         execute_plan(self, plan, assets)
     }
+
+    fn worker_render_settings(&self) -> Option<RenderSettings> {
+        None
+    }
 }
 
 /// Available backend kinds.
