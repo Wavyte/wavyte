@@ -5,7 +5,8 @@ use crate::{
     core::{Canvas, FrameIndex, FrameRange, Transform2D},
     error::{WavyteError, WavyteResult},
     model::{
-        Asset, BlendMode, Clip, ClipProps, Composition, EffectInstance, Track, TransitionSpec,
+        Asset, AudioAsset, BlendMode, Clip, ClipProps, Composition, EffectInstance, Track,
+        TransitionSpec, VideoAsset,
     },
 };
 
@@ -51,6 +52,22 @@ impl CompositionBuilder {
         self
     }
 
+    pub fn video_asset(
+        self,
+        key: impl Into<String>,
+        source: impl Into<String>,
+    ) -> WavyteResult<Self> {
+        self.asset(key, Asset::Video(video_asset(source)))
+    }
+
+    pub fn audio_asset(
+        self,
+        key: impl Into<String>,
+        source: impl Into<String>,
+    ) -> WavyteResult<Self> {
+        self.asset(key, Asset::Audio(audio_asset(source)))
+    }
+
     pub fn build(self) -> WavyteResult<Composition> {
         let comp = Composition {
             fps: self.fps,
@@ -65,9 +82,41 @@ impl CompositionBuilder {
     }
 }
 
+pub fn video_asset(source: impl Into<String>) -> VideoAsset {
+    VideoAsset {
+        source: source.into(),
+        trim_start_sec: 0.0,
+        trim_end_sec: None,
+        playback_rate: 1.0,
+        volume: 1.0,
+        fade_in_sec: 0.0,
+        fade_out_sec: 0.0,
+        muted: false,
+    }
+}
+
+pub fn audio_asset(source: impl Into<String>) -> AudioAsset {
+    AudioAsset {
+        source: source.into(),
+        trim_start_sec: 0.0,
+        trim_end_sec: None,
+        playback_rate: 1.0,
+        volume: 1.0,
+        fade_in_sec: 0.0,
+        fade_out_sec: 0.0,
+        muted: false,
+    }
+}
+
 pub struct TrackBuilder {
     name: String,
     z_base: i32,
+    layout_mode: crate::LayoutMode,
+    layout_gap_px: f64,
+    layout_padding: crate::Edges,
+    layout_align_x: crate::LayoutAlignX,
+    layout_align_y: crate::LayoutAlignY,
+    layout_grid_columns: u32,
     clips: Vec<Clip>,
 }
 
@@ -76,6 +125,12 @@ impl TrackBuilder {
         Self {
             name: name.into(),
             z_base: 0,
+            layout_mode: crate::LayoutMode::Absolute,
+            layout_gap_px: 0.0,
+            layout_padding: crate::Edges::default(),
+            layout_align_x: crate::LayoutAlignX::Start,
+            layout_align_y: crate::LayoutAlignY::Start,
+            layout_grid_columns: 2,
             clips: Vec::new(),
         }
     }
@@ -90,6 +145,32 @@ impl TrackBuilder {
         self
     }
 
+    pub fn layout_mode(mut self, mode: crate::LayoutMode) -> Self {
+        self.layout_mode = mode;
+        self
+    }
+
+    pub fn layout_gap_px(mut self, gap: f64) -> Self {
+        self.layout_gap_px = gap;
+        self
+    }
+
+    pub fn layout_padding(mut self, padding: crate::Edges) -> Self {
+        self.layout_padding = padding;
+        self
+    }
+
+    pub fn layout_align(mut self, x: crate::LayoutAlignX, y: crate::LayoutAlignY) -> Self {
+        self.layout_align_x = x;
+        self.layout_align_y = y;
+        self
+    }
+
+    pub fn layout_grid_columns(mut self, columns: u32) -> Self {
+        self.layout_grid_columns = columns;
+        self
+    }
+
     pub fn build(self) -> WavyteResult<Track> {
         if self.name.trim().is_empty() {
             return Err(WavyteError::validation("track name must be non-empty"));
@@ -97,6 +178,12 @@ impl TrackBuilder {
         Ok(Track {
             name: self.name,
             z_base: self.z_base,
+            layout_mode: self.layout_mode,
+            layout_gap_px: self.layout_gap_px,
+            layout_padding: self.layout_padding,
+            layout_align_x: self.layout_align_x,
+            layout_align_y: self.layout_align_y,
+            layout_grid_columns: self.layout_grid_columns,
             clips: self.clips,
         })
     }

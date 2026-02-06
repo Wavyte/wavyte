@@ -2,7 +2,7 @@ use crate::{
     anim::SampleCtx,
     core::{FrameIndex, FrameRange},
     error::{WavyteError, WavyteResult},
-    model::{BlendMode, Clip, Composition, EffectInstance, TransitionSpec},
+    model::{Asset, BlendMode, Clip, Composition, EffectInstance, TransitionSpec},
 };
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -19,6 +19,7 @@ pub struct EvaluatedClipNode {
     pub transform: kurbo::Affine,
     pub opacity: f64,
     pub blend: BlendMode,
+    pub source_time_s: Option<f64>,
     pub effects: Vec<ResolvedEffect>,
     pub transition_in: Option<ResolvedTransition>,
     pub transition_out: Option<ResolvedTransition>,
@@ -42,6 +43,15 @@ pub struct Evaluator;
 impl Evaluator {
     #[tracing::instrument(skip(comp))]
     pub fn eval_frame(comp: &Composition, frame: FrameIndex) -> WavyteResult<EvaluatedGraph> {
+        Self::eval_frame_with_layout(comp, frame, &crate::LayoutOffsets::default())
+    }
+
+    #[tracing::instrument(skip(comp, layout))]
+    pub fn eval_frame_with_layout(
+        comp: &Composition,
+        frame: FrameIndex,
+        layout: &crate::LayoutOffsets,
+    ) -> WavyteResult<EvaluatedGraph> {
         comp.validate()?;
         if frame.0 >= comp.duration.0 {
             return Err(WavyteError::evaluation("frame is out of bounds"));
@@ -50,12 +60,18 @@ impl Evaluator {
         let mut nodes_with_key: Vec<((i32, usize, u64, String), EvaluatedClipNode)> = Vec::new();
 
         for (track_index, track) in comp.tracks.iter().enumerate() {
-            for clip in &track.clips {
+            for (clip_index, clip) in track.clips.iter().enumerate() {
                 if !clip.range.contains(frame) {
                     continue;
                 }
 
-                let node = eval_clip(comp, clip, frame, track.z_base)?;
+                let node = eval_clip(
+                    comp,
+                    clip,
+                    frame,
+                    track.z_base,
+                    layout.offset_for(track_index, clip_index),
+                )?;
                 let sort_key = (
                     node.z,
                     track_index,
@@ -78,6 +94,7 @@ fn eval_clip(
     clip: &Clip,
     frame: FrameIndex,
     track_z_base: i32,
+    layout_offset: crate::core::Vec2,
 ) -> WavyteResult<EvaluatedClipNode> {
     let clip_local = FrameIndex(frame.0 - clip.range.start.0);
     let seed = stable_hash64(comp.seed, &clip.id);
@@ -89,7 +106,16 @@ fn eval_clip(
     };
 
     let opacity = clip.props.opacity.sample(ctx)?.clamp(0.0, 1.0);
-    let transform = clip.props.transform.sample(ctx)?.to_affine();
+    let transform = kurbo::Affine::translate((layout_offset.x, layout_offset.y))
+        * clip.props.transform.sample(ctx)?.to_affine();
+    let source_time_s = match comp.assets.get(&clip.asset) {
+        Some(Asset::Video(video)) => Some(crate::media::video_source_time_sec(
+            video,
+            clip_local.0,
+            comp.fps,
+        )),
+        _ => None,
+    };
 
     let effects = clip
         .effects
@@ -104,6 +130,7 @@ fn eval_clip(
         transform,
         opacity,
         blend: clip.props.blend,
+        source_time_s,
         effects,
         transition_in: resolve_transition_in(clip, frame),
         transition_out: resolve_transition_out(clip, frame),
@@ -240,6 +267,12 @@ mod tests {
             tracks: vec![Track {
                 name: "main".to_string(),
                 z_base: 0,
+                layout_mode: crate::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: crate::Edges::default(),
+                layout_align_x: crate::LayoutAlignX::Start,
+                layout_align_y: crate::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "t0".to_string(),

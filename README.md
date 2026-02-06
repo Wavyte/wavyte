@@ -1,4 +1,4 @@
-# wavyte (v0.1.0)
+# wavyte (v0.2.0)
 
 Programmatic video composition and rendering in Rust.
 
@@ -7,11 +7,11 @@ into pixels via a deterministic pipeline:
 
 1. **Evaluate** the timeline at a frame index → visible clips in painter’s order
 2. **Compile** into a backend-agnostic **RenderPlan**
-3. **Render** the plan on the **CPU by default** (optional GPU backend)
+3. **Render** the plan on the **CPU backend**
 4. Optionally **encode MP4** by streaming frames to the system `ffmpeg` binary
 
-Wavyte v0.1.0 is deliberately scoped: it aims to be a solid compositing/rendering baseline that we
-can extend into a production-grade product over time.
+Wavyte v0.2.0 adds immutable prepared assets, chunked parallel rendering, static-frame elision,
+feature-gated media decode/mux (`media-ffmpeg`), and track layout primitives.
 
 ---
 
@@ -24,8 +24,10 @@ can extend into a production-grade product over time.
 - CLI
 - Library usage (pipeline and API map)
 - Backends and features
-- Assets (paths, caching, determinism)
+- Assets (prepared store, determinism)
 - Rendering semantics (`RenderPlan`, premultiplied alpha)
+- Parallel/chunked rendering
+- Video/audio + layout
 - MP4 encoding (`ffmpeg`)
 - Development and quality gate
 - License
@@ -156,8 +158,7 @@ Backend selection:
 Implementation details (useful for debugging):
 
 - The CLI validates the composition before rendering.
-- The CLI uses `FsAssetCache` rooted at the directory containing the `--in` JSON file, so relative
-  asset paths resolve relative to the composition file.
+- The CLI prepares a `PreparedAssetStore` rooted at the directory containing the `--in` JSON file.
 - Debug font resolution:
   - `--dump-fonts` prints resolved text font family + SHA-256 of the font bytes.
   - `--dump-svg-fonts` prints SVG text node count + SVG fontdb face count (system + project fonts).
@@ -172,13 +173,13 @@ Wavyte’s core units are:
 - `Evaluator`: resolves per-frame visibility and clip properties
 - `RenderPlan`: backend-agnostic render IR
 - `RenderBackend`: executes the IR into pixels
-- `AssetCache`: isolates asset IO / decoding
+- `PreparedAssetStore`: immutable prepared assets (IO/decoding front-loaded)
 
 The main convenience functions are in `src/pipeline.rs`:
 
-- `render_frame(&Composition, FrameIndex, backend, assets) -> FrameRGBA`
-- `render_frames(&Composition, FrameRange, backend, assets) -> impl Iterator<Item = FrameRGBA>`
-- `render_to_mp4(&Composition, out_path, RenderToMp4Opts, backend, assets) -> WavyteResult<()>`
+- `render_frame(&Composition, FrameIndex, backend, &PreparedAssetStore) -> FrameRGBA`
+- `render_frames_with_stats(..., &RenderThreading) -> (Vec<FrameRGBA>, RenderStats)`
+- `render_to_mp4_with_stats(..., RenderToMp4Opts { threading, .. }) -> RenderStats`
 
 Backend creation:
 
@@ -192,10 +193,21 @@ let mut backend = wavyte::create_backend(wavyte::BackendKind::Cpu, &settings)?;
 Asset IO is isolated:
 
 - Renderers never read from disk directly.
-- All external assets are loaded/decoded through `AssetCache` (use `FsAssetCache` for local files).
+- All external assets are prepared up front with `PreparedAssetStore::prepare`.
 
 For a guided tour of the public API, see the module map in “Project layout” below and the crate
 documentation on docs.rs.
+
+---
+## Migration Notes (v0.1 -> v0.2)
+
+- `AssetCache` and `FsAssetCache` were removed.
+  Use `PreparedAssetStore::prepare(&comp, root)` and pass `&PreparedAssetStore` through pipeline APIs.
+- New parallel/chunked APIs:
+  `render_frames_with_stats` and `render_to_mp4_with_stats` with `RenderThreading`.
+- `VideoAsset` and `AudioAsset` now support trim/rate/volume/fades/mute controls.
+- `Track` now supports layout fields:
+  `layout_mode`, `layout_gap_px`, `layout_padding`, `layout_align_x`, `layout_align_y`, `layout_grid_columns`.
 
 ---
 
@@ -210,7 +222,7 @@ Always available.
 
 ---
 
-## Assets (paths, caching, determinism)
+## Assets (prepared store, determinism)
 
 External asset sources (image/svg/text font) must be:
 
@@ -220,15 +232,24 @@ External asset sources (image/svg/text font) must be:
 
 Wavyte enforces these rules during validation and asset key normalization.
 
-Caching:
+Preparation:
 
-- `AssetId` is stable and derived from the normalized asset key + parameters.
-- `FsAssetCache` memoizes decoded/prepared assets so repeated frames do not re-decode.
+- `AssetId` is stable and derived from normalized asset key + parameters.
+- `PreparedAssetStore::prepare` eagerly loads image/svg/text/path and media assets.
+- Validation checks path shape; IO/decode failures surface during prepare.
 
-Important v0.1.0 rule:
+## Parallel/chunked rendering
 
-- Validation checks that asset sources are well-formed paths, but does not require that the files
-  exist. IO errors are reported when an asset is actually loaded during rendering.
+- `RenderThreading` controls parallelism (`parallel`, `chunk_size`, `threads`).
+- Parallel mode uses worker-local CPU backends via rayon.
+- Optional static-frame elision deduplicates identical frame fingerprints in a chunk.
+
+## Video/audio + layout
+
+- Enable media decode/probe with `--features media-ffmpeg`.
+- Video/audio assets support trim/rate/volume/fades/mute.
+- Audio is mixed to `f32le` and muxed into MP4 when present.
+- Track layouts support `Absolute`, `HStack`, `VStack`, `Grid`, `Center`.
 
 ---
 
@@ -255,7 +276,7 @@ It is a sequence of passes over explicit render surfaces:
 - `Pass::Offscreen(OffscreenPass)` renders an effect into a new surface (e.g. blur)
 - `Pass::Composite(CompositePass)` combines surfaces into a destination (over/crossfade/wipe)
 
-This separation is what lets CPU and GPU backends share a single compiler.
+This separation keeps compile and render concerns decoupled and testable.
 
 ---
 
@@ -287,7 +308,9 @@ Behavior:
 - `src/render_cpu.rs`: CPU backend (vello_cpu + SVG via resvg)
 - `src/pipeline.rs`: `render_frame`, `render_frames`, `render_to_mp4`
 - `src/encode_ffmpeg.rs`: `ffmpeg` encoder process wrapper
-- `src/assets.rs` / `src/assets_decode.rs`: `AssetCache` + in-memory decoding
+- `src/asset_store.rs` / `src/assets_decode.rs`: prepared asset storage + decoding
+- `src/media.rs` / `src/audio_mix.rs`: feature-gated media decode + audio mix/mux helpers
+- `src/layout.rs`: track layout resolver
 - `src/bin/wavyte.rs`: the CLI
 
 ---

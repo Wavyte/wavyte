@@ -127,6 +127,14 @@ pub enum DrawOp {
         blend: BlendMode,
         z: i32,
     },
+    Video {
+        asset: AssetId,
+        source_time_s: f64,
+        transform: Affine,
+        opacity: f32,
+        blend: BlendMode,
+        z: i32,
+    },
 }
 
 pub fn compile_frame(
@@ -203,6 +211,15 @@ pub fn compile_frame(
                 blend: node.blend,
                 z: node.z,
             },
+            PreparedAsset::Video(_) => DrawOp::Video {
+                asset: asset_id,
+                source_time_s: node.source_time_s.unwrap_or(0.0),
+                transform,
+                opacity,
+                blend: node.blend,
+                z: node.z,
+            },
+            PreparedAsset::Audio(_) => continue,
         };
 
         let surf_id = SurfaceId((surfaces.len()) as u32);
@@ -383,6 +400,12 @@ mod tests {
             tracks: vec![Track {
                 name: "t".to_string(),
                 z_base: 0,
+                layout_mode: crate::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: crate::Edges::default(),
+                layout_align_x: crate::LayoutAlignX::Start,
+                layout_align_y: crate::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "p0".to_string(),
@@ -442,6 +465,12 @@ mod tests {
             tracks: vec![Track {
                 name: "t".to_string(),
                 z_base: 0,
+                layout_mode: crate::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: crate::Edges::default(),
+                layout_align_x: crate::LayoutAlignX::Start,
+                layout_align_y: crate::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "p0".to_string(),
@@ -509,6 +538,12 @@ mod tests {
             tracks: vec![Track {
                 name: "t".to_string(),
                 z_base: 0,
+                layout_mode: crate::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: crate::Edges::default(),
+                layout_align_x: crate::LayoutAlignX::Start,
+                layout_align_y: crate::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "p0".to_string(),
@@ -601,6 +636,12 @@ mod tests {
             tracks: vec![Track {
                 name: "t".to_string(),
                 z_base: 0,
+                layout_mode: crate::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: crate::Edges::default(),
+                layout_align_x: crate::LayoutAlignX::Start,
+                layout_align_y: crate::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![
                     Clip {
                         id: "a".to_string(),
@@ -681,6 +722,12 @@ mod tests {
             tracks: vec![Track {
                 name: "t".to_string(),
                 z_base: 0,
+                layout_mode: crate::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: crate::Edges::default(),
+                layout_align_x: crate::LayoutAlignX::Start,
+                layout_align_y: crate::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![
                     Clip {
                         id: "a".to_string(),
@@ -775,6 +822,12 @@ mod tests {
             tracks: vec![Track {
                 name: "t".to_string(),
                 z_base: 0,
+                layout_mode: crate::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: crate::Edges::default(),
+                layout_align_x: crate::LayoutAlignX::Start,
+                layout_align_y: crate::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![
                     Clip {
                         id: "a".to_string(),

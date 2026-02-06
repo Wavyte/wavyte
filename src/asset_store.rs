@@ -10,7 +10,7 @@ use crate::{
     assets_decode,
     core::BezPath,
     error::{WavyteError, WavyteResult},
-    model,
+    media, model,
 };
 
 #[derive(Clone, Debug)]
@@ -56,11 +56,26 @@ pub struct PreparedPath {
 }
 
 #[derive(Clone, Debug)]
+pub struct PreparedAudio {
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub interleaved_f32: Arc<Vec<f32>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedVideo {
+    pub info: Arc<media::VideoSourceInfo>,
+    pub audio: Option<PreparedAudio>,
+}
+
+#[derive(Clone, Debug)]
 pub enum PreparedAsset {
     Image(PreparedImage),
     Svg(PreparedSvg),
     Text(PreparedText),
     Path(PreparedPath),
+    Video(PreparedVideo),
+    Audio(PreparedAudio),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -146,10 +161,38 @@ impl PreparedAssetStore {
                 model::Asset::Path(a) => PreparedAsset::Path(PreparedPath {
                     path: parse_svg_path(&a.svg_path_d)?,
                 }),
-                model::Asset::Video(_) | model::Asset::Audio(_) => {
-                    return Err(WavyteError::validation(
-                        "video/audio assets are not supported by PreparedAssetStore yet",
-                    ));
+                model::Asset::Video(a) => {
+                    let source_path = out.root.join(Path::new(&key.norm_path));
+                    let info = media::probe_video(&source_path)?;
+                    let audio = if info.has_audio {
+                        let pcm =
+                            media::decode_audio_f32_stereo(&source_path, media::MIX_SAMPLE_RATE)?;
+                        if pcm.interleaved_f32.is_empty() {
+                            None
+                        } else {
+                            Some(PreparedAudio {
+                                sample_rate: pcm.sample_rate,
+                                channels: pcm.channels,
+                                interleaved_f32: Arc::new(pcm.interleaved_f32),
+                            })
+                        }
+                    } else {
+                        None
+                    };
+                    let _ = a;
+                    PreparedAsset::Video(PreparedVideo {
+                        info: Arc::new(info),
+                        audio,
+                    })
+                }
+                model::Asset::Audio(_) => {
+                    let source_path = out.root.join(Path::new(&key.norm_path));
+                    let pcm = media::decode_audio_f32_stereo(&source_path, media::MIX_SAMPLE_RATE)?;
+                    PreparedAsset::Audio(PreparedAudio {
+                        sample_rate: pcm.sample_rate,
+                        channels: pcm.channels,
+                        interleaved_f32: Arc::new(pcm.interleaved_f32),
+                    })
                 }
             };
 

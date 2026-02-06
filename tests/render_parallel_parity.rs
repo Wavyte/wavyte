@@ -51,6 +51,12 @@ mod render_parallel_parity {
             tracks: vec![Track {
                 name: "main".to_string(),
                 z_base: 0,
+                layout_mode: wavyte::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: wavyte::Edges::default(),
+                layout_align_x: wavyte::LayoutAlignX::Start,
+                layout_align_y: wavyte::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "p0".to_string(),

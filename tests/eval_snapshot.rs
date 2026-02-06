@@ -32,6 +32,6 @@ fn eval_snapshot_is_deterministic() {
     }
 
     // Updated when semantics change (intentionally should be rare).
-    let expected: u64 = 8_628_882_105_500_321_658;
+    let expected: u64 = 17_822_534_885_193_820_641;
     assert_eq!(digest, expected);
 }

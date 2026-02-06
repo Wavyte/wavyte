@@ -81,6 +81,22 @@ fn main() -> anyhow::Result<()> {
             PreparedAsset::Path(_) => {
                 println!("{name}: path asset");
             }
+            PreparedAsset::Video(v) => {
+                println!(
+                    "{name}: video {}x{} @ {:.3}fps",
+                    v.info.width,
+                    v.info.height,
+                    v.info.source_fps()
+                );
+            }
+            PreparedAsset::Audio(a) => {
+                println!(
+                    "{name}: audio {}ch @ {}Hz ({} samples)",
+                    a.channels,
+                    a.sample_rate,
+                    a.interleaved_f32.len()
+                );
+            }
         }
     }
 

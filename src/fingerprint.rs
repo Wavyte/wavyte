@@ -26,6 +26,13 @@ pub fn fingerprint_eval(eval: &EvaluatedGraph) -> FrameFingerprint {
                 BlendMode::Normal => 0,
             },
         );
+        match node.source_time_s {
+            Some(t) => {
+                write_u8_pair(&mut a, &mut b, 1);
+                write_u64_pair(&mut a, &mut b, t.to_bits());
+            }
+            None => write_u8_pair(&mut a, &mut b, 0),
+        }
 
         write_u64_pair(&mut a, &mut b, node.effects.len() as u64);
         for fx in &node.effects {
@@ -166,6 +173,12 @@ mod tests {
             tracks: vec![crate::Track {
                 name: "main".to_string(),
                 z_base: 0,
+                layout_mode: crate::LayoutMode::Absolute,
+                layout_gap_px: 0.0,
+                layout_padding: crate::Edges::default(),
+                layout_align_x: crate::LayoutAlignX::Start,
+                layout_align_y: crate::LayoutAlignY::Start,
+                layout_grid_columns: 2,
                 clips: vec![Clip {
                     id: "c0".to_string(),
                     asset: "p0".to_string(),

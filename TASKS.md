@@ -159,83 +159,83 @@ When a commit changes media/feature flags, run the relevant subset explicitly an
 
 ### Phase D: Video and Audio Asset Support
 
-18. `v0.2.0 - expand model for video and audio timeline controls`
+- [x] `v0.2.0 - expand model for video and audio timeline controls`
 - Extend `VideoAsset` and `AudioAsset` with trim/rate/volume/fades/mute fields.
 - Add validation rules for new fields.
 - Acceptance: serde roundtrip + validation tests for new schemas.
 
-19. `v0.2.0 - add media abstraction layer and feature-gated ffmpeg backend`
+- [x] `v0.2.0 - add media abstraction layer and feature-gated ffmpeg backend`
 - Add `src/media.rs` abstraction traits for video/audio decode.
 - Add optional backend implementation module (FFmpeg-based).
 - Keep non-media builds fail-fast with clear runtime errors when media assets are used.
 - Acceptance: crate builds both with and without media feature.
 
-20. `v0.2.0 - implement video metadata and per-worker decoder lifecycle`
+- [x] `v0.2.0 - implement video metadata and per-worker decoder lifecycle`
 - Add `VideoSourceInfo` + decoder factory.
 - Add worker-local decoder map keyed by `AssetId`.
 - Add frame LRU cache per decoder.
 - Acceptance: sequential and parallel video render consistency tests.
 
-21. `v0.2.0 - wire video through eval compile and render drawops`
+- [x] `v0.2.0 - wire video through eval compile and render drawops`
 - Add evaluated source timestamp field for video clips.
 - Add `DrawOp::Video` and CPU draw path.
 - Acceptance: video clip renders with trim/playback-rate correctness tests.
 
-22. `v0.2.0 - add prepared audio decode and storage in asset store`
+- [x] `v0.2.0 - add prepared audio decode and storage in asset store`
 - Decode audio into normalized interleaved PCM and store in `PreparedAssetStore`.
 - Include extraction of video-embedded audio when clip is not muted.
 - Acceptance: decode tests for mono/stereo and sample-rate normalization.
 
-23. `v0.2.0 - implement audio manifest builder from timeline`
+- [x] `v0.2.0 - implement audio manifest builder from timeline`
 - Build static audio segment manifest from composition clips.
 - Include fades/volume/trim and clip range mapping using rational FPS conversions.
 - Acceptance: manifest correctness tests on overlapping segments.
 
-24. `v0.2.0 - implement audio mixer and temp pcm output`
+- [x] `v0.2.0 - implement audio mixer and temp pcm output`
 - Add `src/audio_mix.rs` mixdown to `f32le` stereo temp file.
 - Clamp and dither policy (if needed) documented and tested.
 - Acceptance: audio mixing tests for overlap/fade boundaries.
 
-25. `v0.2.0 - extend ffmpeg encoder for audio muxing`
+- [x] `v0.2.0 - extend ffmpeg encoder for audio muxing`
 - Extend encoder config for optional audio input file.
 - Update ffmpeg command assembly for dual-input muxing.
 - Acceptance: MP4 with audible mixed audio and sync smoke test.
 
 ### Phase E: Layout Primitives
 
-26. `v0.2.0 - add layout model types and serde defaults`
+- [x] `v0.2.0 - add layout model types and serde defaults`
 - Add `LayoutMode`, `Edges`, alignment enums on `Track`.
 - Keep `Absolute` as default.
 - Acceptance: old JSON continues to parse with defaults.
 
-27. `v0.2.0 - implement layout resolver pass using prepared asset dimensions`
+- [x] `v0.2.0 - implement layout resolver pass using prepared asset dimensions`
 - Add `src/layout.rs` pre-eval resolver.
 - Support `HStack`, `VStack`, `Grid`, `Center`.
 - Use intrinsic dimensions from prepared assets.
 - Acceptance: deterministic placement unit tests.
 
-28. `v0.2.0 - integrate layout offsets with animated transforms`
+- [x] `v0.2.0 - integrate layout offsets with animated transforms`
 - Resolve composition to layout-adjusted clip transforms/offsets before frame loop.
 - Ensure animated user transforms compose correctly with layout offsets.
 - Acceptance: layout + animation composition tests.
 
-29. `v0.2.0 - extend dsl with video audio and layout builders`
+- [x] `v0.2.0 - extend dsl with video audio and layout builders`
 - Add ergonomic DSL APIs for new asset/layout fields.
 - Acceptance: DSL-based integration examples compile and validate.
 
 ### Phase F: Hardening, Docs, Release
 
-30. `v0.2.0 - add end-to-end media and layout integration tests`
+- [x] `v0.2.0 - add end-to-end media and layout integration tests`
 - Add fixtures generated in-test where practical (small synthetic media).
 - Cover determinism, A/V sync tolerance, and static-frame-elision with media present.
 - Acceptance: CI-stable integration suite.
 
-31. `v0.2.0 - update public docs and migration notes for v0.2`
+- [x] `v0.2.0 - update public docs and migration notes for v0.2`
 - Update README and crate-level docs to reflect new pipeline and APIs.
 - Add upgrade notes from v0.1 APIs.
 - Acceptance: docs match code paths and examples.
 
-32. `v0.2.0 - finalize release metadata and benchmark report`
+- [x] `v0.2.0 - finalize release metadata and benchmark report`
 - Set crate version to `0.2.0`.
 - Capture v0.1 vs v0.2 benchmark deltas using the same harness config.
 - Acceptance: tagged release candidate state with reproducible benchmark command lines.

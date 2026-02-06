@@ -30,7 +30,8 @@ pub fn render_frame(
     backend: &mut dyn RenderBackend,
     assets: &PreparedAssetStore,
 ) -> WavyteResult<FrameRGBA> {
-    let eval = Evaluator::eval_frame(comp, frame)?;
+    let layout_offsets = crate::resolve_layout_offsets(comp, assets)?;
+    let eval = Evaluator::eval_frame_with_layout(comp, frame, &layout_offsets)?;
     let plan = compile_frame(comp, &eval, assets)?;
     execute_plan(backend, &plan, assets)
 }
@@ -89,10 +90,13 @@ pub fn render_frames_with_stats(
     let mut out = Vec::with_capacity(len.min(4096) as usize);
     let mut stats = RenderStats::default();
     let chunk_size = normalized_chunk_size(threading.chunk_size);
+    let layout_offsets = crate::resolve_layout_offsets(comp, assets)?;
 
     if !threading.parallel {
         for f in range.start.0..range.end.0 {
-            out.push(render_frame(comp, FrameIndex(f), backend, assets)?);
+            let eval = Evaluator::eval_frame_with_layout(comp, FrameIndex(f), &layout_offsets)?;
+            let plan = compile_frame(comp, &eval, assets)?;
+            out.push(execute_plan(backend, &plan, assets)?);
             stats.frames_total += 1;
             stats.frames_rendered += 1;
         }
@@ -111,8 +115,15 @@ pub fn render_frames_with_stats(
         let chunk_end = (chunk_start + chunk_size).min(range.end.0);
         let chunk = FrameRange::new(FrameIndex(chunk_start), FrameIndex(chunk_end))
             .map_err(|e| WavyteError::evaluation(format!("invalid chunk range: {e}")))?;
-        let (mut frames, chunk_stats) =
-            render_chunk_parallel_cpu(comp, chunk, assets, &worker_settings, threading, &pool)?;
+        let (mut frames, chunk_stats) = render_chunk_parallel_cpu(
+            comp,
+            chunk,
+            assets,
+            &worker_settings,
+            threading,
+            &pool,
+            &layout_offsets,
+        )?;
         out.append(&mut frames);
         stats.frames_total += chunk_stats.frames_total;
         stats.frames_rendered += chunk_stats.frames_rendered;
@@ -204,12 +215,36 @@ pub fn render_to_mp4_with_stats(
         ));
     }
 
+    let mut audio_tmp = TempFileGuard(None);
+    let audio_manifest = crate::build_audio_manifest(comp, assets, opts.range)?;
+    let audio_cfg = if audio_manifest.segments.is_empty() {
+        None
+    } else {
+        let mixed = crate::mix_manifest(&audio_manifest);
+        let path = std::env::temp_dir().join(format!(
+            "wavyte_audio_mix_{}_{}.f32le",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        crate::write_mix_to_f32le_file(&mixed, &path)?;
+        audio_tmp.0 = Some(path.clone());
+        Some(crate::encode_ffmpeg::AudioInputConfig {
+            path,
+            sample_rate: audio_manifest.sample_rate,
+            channels: audio_manifest.channels,
+        })
+    };
+
     let cfg = crate::encode_ffmpeg::EncodeConfig {
         width: comp.canvas.width,
         height: comp.canvas.height,
         fps,
         out_path,
         overwrite: opts.overwrite,
+        audio: audio_cfg,
     };
 
     let mut enc = crate::encode_ffmpeg::FfmpegEncoder::new(cfg, opts.bg_rgba)?;
@@ -218,6 +253,7 @@ pub fn render_to_mp4_with_stats(
 
     let mut maybe_pool = None;
     let mut maybe_worker_settings = None;
+    let layout_offsets = crate::resolve_layout_offsets(comp, assets)?;
     if opts.threading.parallel {
         maybe_pool = Some(build_thread_pool(opts.threading.threads)?);
         maybe_worker_settings = Some(backend.worker_render_settings().ok_or_else(|| {
@@ -243,9 +279,10 @@ pub fn render_to_mp4_with_stats(
                     .expect("worker settings present when parallel"),
                 &opts.threading,
                 maybe_pool.as_ref().expect("pool present when parallel"),
+                &layout_offsets,
             )?
         } else {
-            render_chunk_sequential(comp, chunk, backend, assets)?
+            render_chunk_sequential(comp, chunk, backend, assets, &layout_offsets)?
         };
 
         for frame in &frames {
@@ -259,6 +296,7 @@ pub fn render_to_mp4_with_stats(
     }
 
     enc.finish()?;
+    drop(audio_tmp);
     Ok(stats)
 }
 
@@ -267,10 +305,13 @@ fn render_chunk_sequential(
     range: FrameRange,
     backend: &mut dyn RenderBackend,
     assets: &PreparedAssetStore,
+    layout_offsets: &crate::LayoutOffsets,
 ) -> WavyteResult<(Vec<FrameRGBA>, RenderStats)> {
     let mut out = Vec::with_capacity(range.len_frames() as usize);
     for f in range.start.0..range.end.0 {
-        out.push(render_frame(comp, FrameIndex(f), backend, assets)?);
+        let eval = Evaluator::eval_frame_with_layout(comp, FrameIndex(f), layout_offsets)?;
+        let plan = compile_frame(comp, &eval, assets)?;
+        out.push(execute_plan(backend, &plan, assets)?);
     }
     let total = range.len_frames();
     Ok((
@@ -290,6 +331,7 @@ fn render_chunk_parallel_cpu(
     settings: &RenderSettings,
     threading: &RenderThreading,
     pool: &rayon::ThreadPool,
+    layout_offsets: &crate::LayoutOffsets,
 ) -> WavyteResult<(Vec<FrameRGBA>, RenderStats)> {
     #[derive(Clone)]
     struct FrameEval {
@@ -299,7 +341,7 @@ fn render_chunk_parallel_cpu(
 
     let mut evals = Vec::with_capacity(range.len_frames() as usize);
     for f in range.start.0..range.end.0 {
-        let eval = Evaluator::eval_frame(comp, FrameIndex(f))?;
+        let eval = Evaluator::eval_frame_with_layout(comp, FrameIndex(f), layout_offsets)?;
         let fingerprint = fingerprint_eval(&eval);
         evals.push(FrameEval { eval, fingerprint });
     }
@@ -405,5 +447,15 @@ fn normalized_chunk_size(chunk_size: usize) -> u64 {
         1
     } else {
         chunk_size as u64
+    }
+}
+
+struct TempFileGuard(Option<std::path::PathBuf>);
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

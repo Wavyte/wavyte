@@ -16,6 +16,14 @@ pub struct EncodeConfig {
     pub fps: u32,
     pub out_path: PathBuf,
     pub overwrite: bool,
+    pub audio: Option<AudioInputConfig>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AudioInputConfig {
+    pub path: PathBuf,
+    pub sample_rate: u32,
+    pub channels: u16,
 }
 
 impl EncodeConfig {
@@ -34,6 +42,18 @@ impl EncodeConfig {
             return Err(WavyteError::validation(
                 "encode width/height must be even (required for yuv420p mp4 output)",
             ));
+        }
+        if let Some(audio) = &self.audio {
+            if audio.sample_rate == 0 {
+                return Err(WavyteError::validation(
+                    "audio sample_rate must be non-zero when audio is enabled",
+                ));
+            }
+            if audio.channels == 0 {
+                return Err(WavyteError::validation(
+                    "audio channels must be non-zero when audio is enabled",
+                ));
+            }
         }
         Ok(())
     }
@@ -58,6 +78,7 @@ pub fn default_mp4_config(
         fps,
         out_path: out_path.into(),
         overwrite: true,
+        audio: None,
     }
 }
 
@@ -140,15 +161,41 @@ impl FfmpegEncoder {
             &cfg.fps.to_string(),
             "-i",
             "pipe:0",
-            "-an",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-        ])
-        .arg(&cfg.out_path);
+        ]);
+        if let Some(audio) = &cfg.audio {
+            cmd.args([
+                "-f",
+                "f32le",
+                "-ar",
+                &audio.sample_rate.to_string(),
+                "-ac",
+                &audio.channels.to_string(),
+                "-i",
+            ])
+            .arg(&audio.path)
+            .args([
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+            ]);
+        } else {
+            cmd.args([
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+            ]);
+        }
+        cmd.arg(&cfg.out_path);
 
         let mut child = cmd.spawn().map_err(|e| {
             WavyteError::evaluation(format!(
@@ -296,6 +343,7 @@ mod tests {
                 fps: 30,
                 out_path: PathBuf::from("assets/out.mp4"),
                 overwrite: true,
+                audio: None,
             }
             .validate()
             .is_err()
@@ -308,6 +356,7 @@ mod tests {
                 fps: 30,
                 out_path: PathBuf::from("assets/out.mp4"),
                 overwrite: true,
+                audio: None,
             }
             .validate()
             .is_err()
@@ -320,6 +369,7 @@ mod tests {
                 fps: 0,
                 out_path: PathBuf::from("assets/out.mp4"),
                 overwrite: true,
+                audio: None,
             }
             .validate()
             .is_err()
