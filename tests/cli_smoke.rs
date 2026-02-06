@@ -63,7 +63,12 @@ fn cli_frame_writes_png() {
     let exe = std::env::var_os("CARGO_BIN_EXE_wavyte")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            let mut p = PathBuf::from("target").join("debug");
+            let profile_dir = if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            };
+            let mut p = PathBuf::from("target").join(profile_dir);
             p.push(if cfg!(windows) {
                 "wavyte.exe"
             } else {

@@ -128,8 +128,13 @@ fn try_main() -> anyhow::Result<()> {
     }
 
     eprintln!(
-        "bench: {repeats} run(s) (debug build), {frames} frames/run ({seconds}s @ {fps} fps), backend={backend:?}, encode={encode}",
+        "bench: {repeats} run(s) ({profile} build), {frames} frames/run ({seconds}s @ {fps} fps), backend={backend:?}, encode={encode}",
         repeats = args.repeats,
+        profile = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
         frames = frames,
         seconds = args.seconds,
         fps = args.fps,
