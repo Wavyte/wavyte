@@ -20,6 +20,10 @@ struct BenchArgs {
     keep_all_outputs: bool,
     no_encode: bool,
     blur_radius: u32,
+    parallel: bool,
+    threads: Option<usize>,
+    chunk_size: usize,
+    static_frame_elision: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -73,6 +77,14 @@ fn try_main() -> anyhow::Result<()> {
     }
     if args.fps == 0 || args.seconds == 0 {
         anyhow::bail!("--fps and --seconds must be > 0");
+    }
+    if args.chunk_size == 0 {
+        anyhow::bail!("--chunk-size must be >= 1");
+    }
+    if let Some(n) = args.threads
+        && n == 0
+    {
+        anyhow::bail!("--threads must be >= 1 when set");
     }
 
     let bench_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -128,7 +140,7 @@ fn try_main() -> anyhow::Result<()> {
     }
 
     eprintln!(
-        "bench: {repeats} run(s) ({profile} build), {frames} frames/run ({seconds}s @ {fps} fps), backend={backend:?}, encode={encode}",
+        "bench: {repeats} run(s) ({profile} build), {frames} frames/run ({seconds}s @ {fps} fps), backend={backend:?}, encode={encode}, mode={mode}, threads={threads}, chunk={chunk}, elision={elision}",
         repeats = args.repeats,
         profile = if cfg!(debug_assertions) {
             "debug"
@@ -140,6 +152,21 @@ fn try_main() -> anyhow::Result<()> {
         fps = args.fps,
         backend = args.backend,
         encode = if args.no_encode { "no" } else { "yes" },
+        mode = if args.parallel {
+            "parallel"
+        } else {
+            "sequential"
+        },
+        threads = args
+            .threads
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "auto".to_string()),
+        chunk = args.chunk_size,
+        elision = if args.static_frame_elision {
+            "on"
+        } else {
+            "off"
+        },
     );
 
     let mut runs = Vec::<RunMetrics>::with_capacity(args.repeats as usize);
@@ -219,6 +246,10 @@ fn parse_args() -> anyhow::Result<BenchArgs> {
         keep_all_outputs: false,
         no_encode: false,
         blur_radius: 0,
+        parallel: false,
+        threads: None,
+        chunk_size: 64,
+        static_frame_elision: false,
     };
 
     while let Some(a) = args.next() {
@@ -246,6 +277,10 @@ fn parse_args() -> anyhow::Result<BenchArgs> {
             }
             "--keep-all" => out.keep_all_outputs = true,
             "--no-encode" => out.no_encode = true,
+            "--parallel" => out.parallel = true,
+            "--threads" => out.threads = Some(parse_usize(args.next(), "--threads")?),
+            "--chunk-size" => out.chunk_size = parse_usize(args.next(), "--chunk-size")?,
+            "--static-frame-elision" => out.static_frame_elision = true,
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -267,6 +302,7 @@ Usage:
   cargo run -q
   cargo run -q -- --repeats 100 --seconds 10 --fps 30
   cargo run -q -- --backend cpu
+  cargo run -q -- --parallel --threads 2
 
 Args:
   --width N        (default 640; must be even for MP4)
@@ -280,6 +316,10 @@ Args:
   --out-dir PATH   (default assets/bench)
   --keep-all       keep per-run outputs (otherwise overwrite the same file)
   --no-encode      render frames but do not spawn ffmpeg
+  --parallel       use frame-parallel pipeline for eval+compile+render
+  --threads N      worker threads for parallel mode (default auto)
+  --chunk-size N   frames per chunk in parallel mode (default 64)
+  --static-frame-elision  enable fingerprint-based still-frame elision
 "#
     );
 }
@@ -287,6 +327,12 @@ Args:
 fn parse_u32(v: Option<String>, flag: &str) -> anyhow::Result<u32> {
     let v = v.ok_or_else(|| anyhow::anyhow!("missing value for {flag}"))?;
     v.parse::<u32>()
+        .with_context(|| format!("parse {flag} value '{v}'"))
+}
+
+fn parse_usize(v: Option<String>, flag: &str) -> anyhow::Result<usize> {
+    let v = v.ok_or_else(|| anyhow::anyhow!("missing value for {flag}"))?;
+    v.parse::<usize>()
         .with_context(|| format!("parse {flag} value '{v}'"))
 }
 
@@ -555,23 +601,46 @@ fn run_once(
         ..RunMetrics::default()
     };
 
-    for f in 0..comp.duration.0 {
-        let t0 = Instant::now();
-        let eval = wavyte::Evaluator::eval_frame(comp, wavyte::FrameIndex(f))?;
-        m.eval_total += t0.elapsed();
+    if args.parallel {
+        let threading = wavyte::RenderThreading {
+            parallel: true,
+            chunk_size: args.chunk_size,
+            threads: args.threads,
+            static_frame_elision: args.static_frame_elision,
+        };
 
-        let t1 = Instant::now();
-        let plan = wavyte::compile_frame(comp, &eval, &assets)?;
-        m.compile_total += t1.elapsed();
-
+        let range = wavyte::FrameRange::new(wavyte::FrameIndex(0), comp.duration)?;
         let t2 = Instant::now();
-        let frame = backend.render_plan(&plan, &assets)?;
+        let (frames, _stats) =
+            wavyte::render_frames_with_stats(comp, range, backend.as_mut(), &assets, &threading)?;
         m.render_total += t2.elapsed();
 
         if let Some((enc, _spawn)) = enc.as_mut() {
-            let t3 = Instant::now();
-            enc.encode_frame(&frame)?;
-            m.encode_write_total += t3.elapsed();
+            for frame in &frames {
+                let t3 = Instant::now();
+                enc.encode_frame(frame)?;
+                m.encode_write_total += t3.elapsed();
+            }
+        }
+    } else {
+        for f in 0..comp.duration.0 {
+            let t0 = Instant::now();
+            let eval = wavyte::Evaluator::eval_frame(comp, wavyte::FrameIndex(f))?;
+            m.eval_total += t0.elapsed();
+
+            let t1 = Instant::now();
+            let plan = wavyte::compile_frame(comp, &eval, &assets)?;
+            m.compile_total += t1.elapsed();
+
+            let t2 = Instant::now();
+            let frame = backend.render_plan(&plan, &assets)?;
+            m.render_total += t2.elapsed();
+
+            if let Some((enc, _spawn)) = enc.as_mut() {
+                let t3 = Instant::now();
+                enc.encode_frame(&frame)?;
+                m.encode_write_total += t3.elapsed();
+            }
         }
     }
 
@@ -585,7 +654,7 @@ fn run_once(
 
     if !is_warmup {
         eprintln!(
-            "run {run_idx:03}: wall={wall:.3}s eval={ev:.3}s compile={co:.3}s render={re:.3}s encode_write={en:.3}s ffmpeg_spawn={sp:.3}s ffmpeg_finish={fi:.3}s",
+            "run {run_idx:03}: wall={wall:.3}s eval={ev:.3}s compile={co:.3}s render={re:.3}s encode_write={en:.3}s ffmpeg_spawn={sp:.3}s ffmpeg_finish={fi:.3}s mode={mode}",
             wall = m.wall_total.as_secs_f64(),
             ev = m.eval_total.as_secs_f64(),
             co = m.compile_total.as_secs_f64(),
@@ -593,6 +662,11 @@ fn run_once(
             en = m.encode_write_total.as_secs_f64(),
             sp = m.ffmpeg_spawn.as_secs_f64(),
             fi = m.ffmpeg_finish.as_secs_f64(),
+            mode = if args.parallel {
+                "parallel(render=eval+compile+render)"
+            } else {
+                "sequential"
+            },
         );
     }
 
