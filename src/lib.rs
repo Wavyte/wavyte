@@ -23,32 +23,58 @@
 //! - For a detailed, standalone walkthrough of the API and architecture, see [`crate::guide`].
 #![forbid(unsafe_code)]
 
+#[path = "animation/anim.rs"]
 mod anim;
+#[path = "animation/ease.rs"]
 mod anim_ease;
+#[path = "animation/ops.rs"]
 mod anim_ops;
+#[path = "animation/proc.rs"]
 mod anim_proc;
+#[path = "assets/store.rs"]
 mod asset_store;
+#[path = "assets/decode.rs"]
 mod assets_decode;
+#[path = "audio/mix.rs"]
 mod audio_mix;
+#[path = "render/compile.rs"]
 mod compile;
+#[path = "foundation/core.rs"]
 mod core;
+#[path = "composition/dsl.rs"]
 mod dsl;
+#[path = "render/encode_ffmpeg.rs"]
 mod encode_ffmpeg;
+#[path = "foundation/error.rs"]
 mod error;
+#[path = "composition/eval.rs"]
 mod eval;
+#[path = "render/fingerprint.rs"]
 mod fingerprint;
+#[path = "render/fx.rs"]
 mod fx;
+#[path = "composition/layout.rs"]
 mod layout;
+#[path = "assets/media.rs"]
 mod media;
+#[path = "composition/model.rs"]
 mod model;
+#[path = "render/pipeline.rs"]
 mod pipeline;
+#[path = "render/backend.rs"]
 mod render;
+#[path = "render/passes.rs"]
 mod render_passes;
+#[path = "assets/svg_raster.rs"]
 mod svg_raster;
+#[path = "render/transitions.rs"]
 mod transitions;
 
+#[path = "render/blur.rs"]
 mod blur_cpu;
+#[path = "render/composite.rs"]
 mod composite_cpu;
+#[path = "render/cpu.rs"]
 mod render_cpu;
 
 /// High-level, standalone documentation for Wavyte’s concepts and architecture.

@@ -184,7 +184,7 @@ Wavyte’s core units are:
 - `RenderBackend`: executes the IR into pixels
 - `PreparedAssetStore`: immutable prepared assets (IO/decoding front-loaded)
 
-The main convenience functions are in `src/pipeline.rs`:
+The main convenience functions are in `src/render/pipeline.rs`:
 
 - `render_frame(&Composition, FrameIndex, backend, &PreparedAssetStore) -> FrameRGBA`
 - `render_frames_with_stats(..., &RenderThreading) -> (Vec<FrameRGBA>, RenderStats)`
@@ -296,8 +296,8 @@ This is intentionally a **runtime prerequisite**, not a Cargo feature.
 
 Where this lives:
 
-- `src/encode_ffmpeg.rs`: `FfmpegEncoder` + config validation + process spawning
-- `src/pipeline.rs`: orchestration via `render_to_mp4`
+- `src/render/encode_ffmpeg.rs`: `FfmpegEncoder` + config validation + process spawning
+- `src/render/pipeline.rs`: orchestration via `render_to_mp4`
 
 Behavior:
 
@@ -309,17 +309,17 @@ Behavior:
 
 ## Project layout (where to look)
 
-- `src/model.rs`: `Composition`, assets, tracks, clips, validation rules
-- `src/anim*.rs`: `Anim<T>` and helpers (keyframes, sequencing, easing)
-- `src/eval.rs`: `Evaluator` and the evaluated graph (visibility + resolved transforms)
-- `src/compile.rs`: backend-agnostic compiler into `RenderPlan`
-- `src/render.rs`: backend trait + backend selection (`BackendKind`, `create_backend`)
-- `src/render_cpu.rs`: CPU backend (vello_cpu + SVG via resvg)
-- `src/pipeline.rs`: `render_frame`, `render_frames`, `render_to_mp4`
-- `src/encode_ffmpeg.rs`: `ffmpeg` encoder process wrapper
-- `src/asset_store.rs` / `src/assets_decode.rs`: prepared asset storage + decoding
-- `src/media.rs` / `src/audio_mix.rs`: feature-gated media decode + audio mix/mux helpers
-- `src/layout.rs`: track layout resolver
+- `src/composition/model.rs`: `Composition`, assets, tracks, clips, validation rules
+- `src/animation/*.rs`: `Anim<T>` and helpers (keyframes, sequencing, easing)
+- `src/composition/eval.rs`: `Evaluator` and the evaluated graph (visibility + resolved transforms)
+- `src/render/compile.rs`: backend-agnostic compiler into `RenderPlan`
+- `src/render/backend.rs`: backend trait + backend selection (`BackendKind`, `create_backend`)
+- `src/render/cpu.rs`: CPU backend (vello_cpu + SVG via resvg)
+- `src/render/pipeline.rs`: `render_frame`, `render_frames`, `render_to_mp4`
+- `src/render/encode_ffmpeg.rs`: `ffmpeg` encoder process wrapper
+- `src/assets/store.rs` / `src/assets/decode.rs`: prepared asset storage + decoding
+- `src/assets/media.rs` / `src/audio/mix.rs`: feature-gated media decode + audio mix/mux helpers
+- `src/composition/layout.rs`: track layout resolver
 - `src/bin/wavyte.rs`: the CLI
 
 ---
