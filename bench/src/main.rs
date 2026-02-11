@@ -440,7 +440,7 @@ fn build_benchmark_comp(
     .asset(
         "txt",
         wavyte::Asset::Text(wavyte::TextAsset {
-            text: "wavyte v0.2.0 benchmark".to_string(),
+            text: "wavyte v0.2.1 benchmark".to_string(),
             font_source: assets.font_rel.clone(),
             size_px: 64.0,
             max_width_px: Some(params.width as f32 - 80.0),
