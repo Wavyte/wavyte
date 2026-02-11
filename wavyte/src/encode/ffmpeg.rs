@@ -7,7 +7,7 @@ use std::{
 use crate::{
     foundation::error::{WavyteError, WavyteResult},
     foundation::math::mul_div255_u16,
-    render::FrameRGBA,
+    render::backend::FrameRGBA,
 };
 
 /// Configuration for MP4 encoding via the system `ffmpeg` binary.

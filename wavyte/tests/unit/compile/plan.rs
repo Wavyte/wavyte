@@ -8,18 +8,18 @@ use crate::{
     composition::model::{
         Asset, BlendMode, Clip, ClipProps, EffectInstance, PathAsset, Track, TransitionSpec,
     },
-    eval::Evaluator,
+    eval::evaluator::Evaluator,
     foundation::core::{Fps, FrameIndex, FrameRange, Transform2D},
 };
 
 #[test]
 fn parse_effect_cache_key_is_order_insensitive_for_object_params() {
     let mut cache = CompileCache::default();
-    let a = crate::eval::ResolvedEffect {
+    let a = crate::eval::evaluator::ResolvedEffect {
         kind: "blur".to_string(),
         params: serde_json::json!({ "radius_px": 3, "sigma": 2.0 }),
     };
-    let b = crate::eval::ResolvedEffect {
+    let b = crate::eval::evaluator::ResolvedEffect {
         kind: "blur".to_string(),
         params: serde_json::json!({ "sigma": 2.0, "radius_px": 3 }),
     };
@@ -34,12 +34,12 @@ fn parse_effect_cache_key_is_order_insensitive_for_object_params() {
 #[test]
 fn parse_transition_cache_key_is_order_insensitive_for_object_params() {
     let mut cache = CompileCache::default();
-    let a = crate::eval::ResolvedTransition {
+    let a = crate::eval::evaluator::ResolvedTransition {
         kind: "wipe".to_string(),
         progress: 0.5,
         params: serde_json::json!({ "dir": "ttb", "soft_edge": 0.2 }),
     };
-    let b = crate::eval::ResolvedTransition {
+    let b = crate::eval::evaluator::ResolvedTransition {
         kind: "wipe".to_string(),
         progress: 0.5,
         params: serde_json::json!({ "soft_edge": 0.2, "dir": "ttb" }),

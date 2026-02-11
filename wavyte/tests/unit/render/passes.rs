@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     assets::store::PreparedAssetStore,
-    compile::{CompositeOp, PixelFormat},
+    compile::plan::{CompositeOp, PixelFormat},
     foundation::core::{Canvas, Rgba8Premul},
     foundation::error::WavyteResult,
 };
@@ -144,7 +144,7 @@ fn execute_plan_returns_final_frame() {
         }],
         passes: vec![Pass::Scene(ScenePass {
             target: SurfaceId(0),
-            ops: vec![crate::compile::DrawOp::FillPath {
+            ops: vec![crate::compile::plan::DrawOp::FillPath {
                 path: crate::foundation::core::BezPath::new(),
                 transform: crate::foundation::core::Affine::IDENTITY,
                 color: Rgba8Premul::from_straight_rgba(0, 0, 0, 0),

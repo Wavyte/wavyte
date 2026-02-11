@@ -5,13 +5,13 @@ use rayon::prelude::*;
 use crate::{
     assets::store::PreparedAssetStore,
     compile::fingerprint::{FrameFingerprint, fingerprint_eval},
-    compile::{CompileCache, compile_frame_with_cache},
+    compile::plan::{CompileCache, compile_frame_with_cache},
     composition::model::Composition,
-    eval::Evaluator,
+    eval::evaluator::Evaluator,
     foundation::core::{FrameIndex, FrameRange},
     foundation::error::{WavyteError, WavyteResult},
+    render::backend::{FrameRGBA, RenderBackend, RenderSettings},
     render::passes::execute_plan,
-    render::{FrameRGBA, RenderBackend, RenderSettings},
 };
 
 /// Evaluate + compile + render a single frame.

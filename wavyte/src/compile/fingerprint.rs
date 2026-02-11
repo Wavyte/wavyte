@@ -1,4 +1,6 @@
-use crate::{composition::model::BlendMode, eval::EvaluatedGraph, foundation::math::Fnv1a64};
+use crate::{
+    composition::model::BlendMode, eval::evaluator::EvaluatedGraph, foundation::math::Fnv1a64,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// Deterministic 128-bit fingerprint of an evaluated frame graph.

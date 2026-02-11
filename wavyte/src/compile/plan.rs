@@ -5,7 +5,7 @@ use crate::{
     composition::model::{BlendMode, Composition},
     effects::fx::{PassFx, normalize_effects, parse_effect},
     effects::transitions::{TransitionKind, WipeDir, parse_transition_kind_params},
-    eval::EvaluatedGraph,
+    eval::evaluator::EvaluatedGraph,
     foundation::core::{Affine, BezPath, Canvas, Rgba8Premul},
     foundation::error::WavyteResult,
     foundation::math::Fnv1a64,
@@ -264,8 +264,8 @@ pub(crate) fn compile_frame_with_cache(
     #[derive(Clone, Debug)]
     struct Layer {
         surface: SurfaceId,
-        transition_in: Option<crate::eval::ResolvedTransition>,
-        transition_out: Option<crate::eval::ResolvedTransition>,
+        transition_in: Option<crate::eval::evaluator::ResolvedTransition>,
+        transition_out: Option<crate::eval::evaluator::ResolvedTransition>,
     }
 
     let mut surfaces = Vec::<SurfaceDesc>::new();
@@ -476,7 +476,7 @@ pub(crate) fn compile_frame_with_cache(
 
 fn parse_effect_cached(
     cache: &mut CompileCache,
-    effect: &crate::eval::ResolvedEffect,
+    effect: &crate::eval::evaluator::ResolvedEffect,
 ) -> WavyteResult<crate::effects::fx::Effect> {
     let key = EffectCacheKey {
         kind_hash: hash_str64(&effect.kind),
@@ -509,7 +509,7 @@ fn parse_effect_cached(
 
 fn parse_transition_cached(
     cache: &mut CompileCache,
-    transition: &crate::eval::ResolvedTransition,
+    transition: &crate::eval::evaluator::ResolvedTransition,
 ) -> WavyteResult<TransitionKind> {
     let key = TransitionCacheKey {
         kind_hash: hash_str64(&transition.kind),

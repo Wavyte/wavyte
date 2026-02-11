@@ -1,8 +1,10 @@
 use crate::{
     assets::store::PreparedAssetStore,
-    compile::{CompositePass, OffscreenPass, Pass, RenderPlan, ScenePass, SurfaceDesc, SurfaceId},
+    compile::plan::{
+        CompositePass, OffscreenPass, Pass, RenderPlan, ScenePass, SurfaceDesc, SurfaceId,
+    },
     foundation::error::{WavyteError, WavyteResult},
-    render::FrameRGBA,
+    render::backend::FrameRGBA,
 };
 
 /// Backend execution interface for individual render pass kinds.

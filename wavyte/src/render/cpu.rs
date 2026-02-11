@@ -4,10 +4,10 @@ use crate::{
     assets::media,
     assets::store::{AssetId, PreparedAsset, PreparedAssetStore},
     assets::svg_raster::{SvgRasterKey, rasterize_svg_to_premul_rgba8, svg_raster_params},
-    compile::{CompositeOp, DrawOp, SurfaceDesc, SurfaceId},
+    compile::plan::{CompositeOp, DrawOp, SurfaceDesc, SurfaceId},
     foundation::error::{WavyteError, WavyteResult},
+    render::backend::{FrameRGBA, RenderBackend, RenderSettings},
     render::passes::PassBackend,
-    render::{FrameRGBA, RenderBackend, RenderSettings},
 };
 
 /// CPU renderer implementation backed by `vello_cpu`.
@@ -196,7 +196,7 @@ impl PassBackend for CpuBackend {
 
     fn exec_scene(
         &mut self,
-        pass: &crate::compile::ScenePass,
+        pass: &crate::compile::plan::ScenePass,
         assets: &PreparedAssetStore,
     ) -> WavyteResult<()> {
         let mut surface = self.surfaces.remove(&pass.target).ok_or_else(|| {
@@ -222,7 +222,7 @@ impl PassBackend for CpuBackend {
 
     fn exec_offscreen(
         &mut self,
-        pass: &crate::compile::OffscreenPass,
+        pass: &crate::compile::plan::OffscreenPass,
         _assets: &PreparedAssetStore,
     ) -> WavyteResult<()> {
         let mut output = self.surfaces.remove(&pass.output).ok_or_else(|| {
@@ -267,7 +267,7 @@ impl PassBackend for CpuBackend {
 
     fn exec_composite(
         &mut self,
-        pass: &crate::compile::CompositePass,
+        pass: &crate::compile::plan::CompositePass,
         _assets: &PreparedAssetStore,
     ) -> WavyteResult<()> {
         let mut dst = self.surfaces.remove(&pass.target).ok_or_else(|| {
@@ -353,7 +353,7 @@ impl PassBackend for CpuBackend {
     fn readback_rgba8(
         &mut self,
         surface: SurfaceId,
-        plan: &crate::compile::RenderPlan,
+        plan: &crate::compile::plan::RenderPlan,
         _assets: &PreparedAssetStore,
     ) -> WavyteResult<FrameRGBA> {
         let s = self.surfaces.get(&surface).ok_or_else(|| {

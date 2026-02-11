@@ -1,6 +1,6 @@
 use crate::{
     assets::store::PreparedAssetStore,
-    compile::RenderPlan,
+    compile::plan::RenderPlan,
     foundation::error::WavyteResult,
     render::passes::{PassBackend, execute_plan},
 };
