@@ -1,0 +1,36 @@
+    Finished `release` profile [optimized] target(s) in 0.14s
+     Running `/root/projects/wavyte-org/wavyte/target/release/wavyte-bench --repeats 10 --warmup 1 --seconds 10 --parallel --threads 2`
+assets:
+  font:  assets/PlayfairDisplay.ttf
+  svg:   assets/logo.svg
+  image: assets/test_image_1.jpg
+font diagnostics:
+  svg:svg:
+    source:     assets/logo.svg
+    font_faces: 10
+  text:txt:
+    font_source: assets/PlayfairDisplay.ttf
+    family:      Playfair Display
+    sha256:      7b756032127781da7f7cc4410ec3cac50fa34b50c4e8408c5f6bf47dfd5eed83
+warmup: 1 run(s)
+bench: 10 run(s) (release build), 300 frames/run (10s @ 30 fps), backend=Cpu, encode=yes, mode=parallel, threads=2, chunk=64, elision=off
+run 000: wall=4.938s eval=0.000s compile=0.000s render=3.653s encode_write=1.086s ffmpeg_spawn=0.078s ffmpeg_finish=0.051s mode=parallel(render=eval+compile+render)
+run 001: wall=5.096s eval=0.000s compile=0.000s render=3.618s encode_write=1.261s ffmpeg_spawn=0.084s ffmpeg_finish=0.065s mode=parallel(render=eval+compile+render)
+run 002: wall=4.740s eval=0.000s compile=0.000s render=3.600s encode_write=0.913s ffmpeg_spawn=0.093s ffmpeg_finish=0.060s mode=parallel(render=eval+compile+render)
+run 003: wall=4.598s eval=0.000s compile=0.000s render=3.442s encode_write=0.948s ffmpeg_spawn=0.084s ffmpeg_finish=0.056s mode=parallel(render=eval+compile+render)
+run 004: wall=4.286s eval=0.000s compile=0.000s render=3.229s encode_write=0.803s ffmpeg_spawn=0.112s ffmpeg_finish=0.064s mode=parallel(render=eval+compile+render)
+run 005: wall=5.300s eval=0.000s compile=0.000s render=3.107s encode_write=1.751s ffmpeg_spawn=0.080s ffmpeg_finish=0.281s mode=parallel(render=eval+compile+render)
+run 006: wall=6.693s eval=0.000s compile=0.000s render=4.783s encode_write=1.426s ffmpeg_spawn=0.219s ffmpeg_finish=0.075s mode=parallel(render=eval+compile+render)
+run 007: wall=5.079s eval=0.000s compile=0.000s render=3.517s encode_write=1.298s ffmpeg_spawn=0.107s ffmpeg_finish=0.079s mode=parallel(render=eval+compile+render)
+run 008: wall=4.521s eval=0.000s compile=0.000s render=3.128s encode_write=1.150s ffmpeg_spawn=0.075s ffmpeg_finish=0.105s mode=parallel(render=eval+compile+render)
+run 009: wall=5.802s eval=0.000s compile=0.000s render=3.273s encode_write=2.186s ffmpeg_spawn=0.079s ffmpeg_finish=0.138s mode=parallel(render=eval+compile+render)
+
+percentiles across runs (p50/p90/p99):
+  backend_create     p50=   0.001ms  p90=   0.001ms  p99=   0.001ms
+  ffmpeg_spawn       p50=  84.314ms  p90= 112.130ms  p99= 219.219ms
+  eval_total         p50=   0.000ms  p90=   0.000ms  p99=   0.000ms
+  compile_total      p50=   0.000ms  p90=   0.000ms  p99=   0.000ms
+  render_total       p50=3441.560ms  p90=3652.722ms  p99=4782.935ms
+  encode_write_total p50=1150.140ms  p90=1751.353ms  p99=2185.587ms
+  ffmpeg_finish      p50=  65.296ms  p90= 137.649ms  p99= 280.638ms
+  wall_total         p50=4938.074ms  p90=5801.970ms  p99=6693.318ms

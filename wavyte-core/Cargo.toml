@@ -1,0 +1,41 @@
+[package]
+name = "wavyte-core"
+version = "0.2.1"
+edition = "2024"
+rust-version = "1.93"
+license = "AGPL-3.0-only"
+description = "Programmatic video composition and rendering engine in Rust (CPU backend, ffmpeg MP4 encoding)"
+repository = "https://github.com/Wavyte/wavyte"
+homepage = "https://github.com/Wavyte/wavyte"
+documentation = "https://docs.rs/wavyte-core"
+readme = "../README.md"
+keywords = ["video", "rendering", "compositing", "ffmpeg", "motion-graphics"]
+
+[lib]
+name = "wavyte"
+path = "src/lib.rs"
+
+[features]
+default = []
+media-ffmpeg = []
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+anyhow = "1"
+image = "0.25.9"
+kurbo = { version = "0.13", features = ["serde"] }
+parley = { version = "0.7.0", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1.11.0"
+thiserror = "2"
+tracing = { version = "0.1", features = ["attributes"] }
+usvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+resvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+vello_cpu = { version = "0.0.6", default-features = false, features = ["std", "text", "u8_pipeline"] }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
