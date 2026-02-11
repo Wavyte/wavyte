@@ -14,7 +14,7 @@ that role.
 If Rust and `ffmpeg` are installed, run:
 
 ```bash
-cargo run -p wavyte-core --example render_remotion_hello_world_mp4
+cargo run -p wavyte --example render_remotion_hello_world_mp4
 ```
 
 You should get a rendered MP4 in the repo `assets/` directory.
@@ -57,7 +57,7 @@ programmatic composition at scale.
 
 Wavyte is being shaped as the engine beneath multiple downstream products:
 
-1. `wavyte-core` (today): the rendering/composition engine.
+1. `wavyte` (today): the rendering/composition engine.
 2. `wavyte-std` (planned): high-level ergonomic abstractions for layouts, animation chains, effects,
    and reusable visual components.
 3. `wavyte-py` and `wavyte-ts` (planned): Python and TypeScript bindings for broader ecosystem use.
@@ -80,7 +80,7 @@ In the next version (v0.3), we will taking a major effort on actually making wor
 ## What works today (v0.2.1)
 
 - Workspace crates:
-  - `wavyte-core` (library crate name: `wavyte`)
+  - `wavyte` (library crate name: `wavyte`)
   - `wavyte-cli` (binary: `wavyte`)
   - `bench` (standalone benchmark harness)
 - CPU rendering backend (`vello_cpu`) with premultiplied RGBA semantics
@@ -124,18 +124,18 @@ ffprobe -version
 Run core examples:
 
 ```bash
-cargo run -p wavyte-core --example render_crossfade_png
-cargo run -p wavyte-core --example render_blur_png
-cargo run -p wavyte-core --example render_remotion_hello_world_mp4
-cargo run -p wavyte-core --example render_aesthetic_motion_mp4
-cargo run -p wavyte-core --example render_aesthetic_fx_mp4
-cargo run -p wavyte-core --example render_aesthetic_layout_mp4
+cargo run -p wavyte --example render_crossfade_png
+cargo run -p wavyte --example render_blur_png
+cargo run -p wavyte --example render_remotion_hello_world_mp4
+cargo run -p wavyte --example render_aesthetic_motion_mp4
+cargo run -p wavyte --example render_aesthetic_fx_mp4
+cargo run -p wavyte --example render_aesthetic_layout_mp4
 ```
 
 Full media/layout example (`media-ffmpeg` feature):
 
 ```bash
-cargo run -p wavyte-core --features media-ffmpeg --example render_full_gamut_media_layout_mp4
+cargo run -p wavyte --features media-ffmpeg --example render_full_gamut_media_layout_mp4
 ```
 
 Examples write outputs under repo-local `assets/`.
@@ -232,7 +232,7 @@ cargo run -p wavyte-cli --bin wavyte -- frame --in comp.json --frame 0 --out out
 
 ## API entry points
 
-Core public APIs (see `wavyte-core/src/render/pipeline.rs`):
+Core public APIs (see `wavyte/src/render/pipeline.rs`):
 
 - `render_frame(...) -> FrameRGBA`
 - `render_frames_with_stats(...) -> (Vec<FrameRGBA>, RenderStats)`
@@ -256,18 +256,18 @@ let mut backend = wavyte::create_backend(wavyte::BackendKind::Cpu, &settings)?;
 
 ## Project layout
 
-- `wavyte-core/src/foundation/`: errors, core types, shared math/hash helpers
-- `wavyte-core/src/animation/`: animation/easing/procedural/operators
-- `wavyte-core/src/transform/`: linear, affine, and non-linear helpers
-- `wavyte-core/src/effects/`: effect parse/normalize + blur/composite/transitions
-- `wavyte-core/src/layout/`: layout solver
-- `wavyte-core/src/composition/`: model + DSL builders
-- `wavyte-core/src/eval/`: evaluator/frame graph
-- `wavyte-core/src/compile/`: render IR/plan + fingerprinting
-- `wavyte-core/src/render/`: backends, pass execution, CPU impl, pipeline
-- `wavyte-core/src/audio/`: manifest and mixer
-- `wavyte-core/src/encode/`: ffmpeg encoder wrapper
-- `wavyte-core/src/assets/`: prepare/decode/media/raster helpers
+- `wavyte/src/foundation/`: errors, core types, shared math/hash helpers
+- `wavyte/src/animation/`: animation/easing/procedural/operators
+- `wavyte/src/transform/`: linear, affine, and non-linear helpers
+- `wavyte/src/effects/`: effect parse/normalize + blur/composite/transitions
+- `wavyte/src/layout/`: layout solver
+- `wavyte/src/composition/`: model + DSL builders
+- `wavyte/src/eval/`: evaluator/frame graph
+- `wavyte/src/compile/`: render IR/plan + fingerprinting
+- `wavyte/src/render/`: backends, pass execution, CPU impl, pipeline
+- `wavyte/src/audio/`: manifest and mixer
+- `wavyte/src/encode/`: ffmpeg encoder wrapper
+- `wavyte/src/assets/`: prepare/decode/media/raster helpers
 - `wavyte-cli/src/main.rs`: CLI entrypoint
 - `bench/src/main.rs`: benchmark harness
 - `EXPLANATION.md`: exhaustive architecture walkthrough

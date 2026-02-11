@@ -1,5 +1,5 @@
 [package]
-name = "wavyte-core"
+name = "wavyte"
 version = "0.2.1"
 edition = "2024"
 rust-version = "1.93"
@@ -7,7 +7,7 @@ license = "AGPL-3.0-only"
 description = "Programmatic video composition and rendering engine in Rust (CPU backend, ffmpeg MP4 encoding)"
 repository = "https://github.com/Wavyte/wavyte"
 homepage = "https://github.com/Wavyte/wavyte"
-documentation = "https://docs.rs/wavyte-core"
+documentation = "https://docs.rs/wavyte"
 readme = "../README.md"
 keywords = ["video", "rendering", "compositing", "ffmpeg", "motion-graphics"]
 

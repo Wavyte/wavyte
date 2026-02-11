@@ -1,11 +1,11 @@
 [workspace]
 members = [
-  "wavyte-core",
+  "wavyte",
   "wavyte-cli",
   "bench",
 ]
 default-members = [
-  "wavyte-core",
+  "wavyte",
   "wavyte-cli",
 ]
 resolver = "2"

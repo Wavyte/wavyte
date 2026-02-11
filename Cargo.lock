@@ -1871,30 +1871,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wavyte-bench"
-version = "0.2.1"
-dependencies = [
- "anyhow",
- "serde_json",
- "sha2",
- "wavyte-core",
-]
-
-[[package]]
-name = "wavyte-cli"
-version = "0.2.1"
-dependencies = [
- "anyhow",
- "clap",
- "image",
- "serde_json",
- "sha2",
- "usvg",
- "wavyte-core",
-]
-
-[[package]]
-name = "wavyte-core"
+name = "wavyte"
 version = "0.2.1"
 dependencies = [
  "anyhow",
@@ -1910,6 +1887,29 @@ dependencies = [
  "tracing-subscriber",
  "usvg",
  "vello_cpu",
+]
+
+[[package]]
+name = "wavyte-bench"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sha2",
+ "wavyte",
+]
+
+[[package]]
+name = "wavyte-cli"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "image",
+ "serde_json",
+ "sha2",
+ "usvg",
+ "wavyte",
 ]
 
 [[package]]
