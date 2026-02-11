@@ -30,40 +30,97 @@ struct VideoFrameDecoder {
     frame_cache: HashMap<u64, vello_cpu::Image>,
     lru: VecDeque<u64>,
     capacity: usize,
+    prefetch_frames: u32,
 }
 
 impl VideoFrameDecoder {
     fn new(info: std::sync::Arc<media::VideoSourceInfo>) -> Self {
+        let capacity = std::env::var("WAVYTE_VIDEO_CACHE_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(64);
+        let prefetch_frames = std::env::var("WAVYTE_VIDEO_PREFETCH_FRAMES")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(12);
         Self {
             info,
             frame_cache: HashMap::new(),
             lru: VecDeque::new(),
-            capacity: 8,
+            capacity,
+            prefetch_frames,
         }
     }
 
     fn decode_at(&mut self, source_time_s: f64) -> WavyteResult<vello_cpu::Image> {
-        let key_ms = ((source_time_s.max(0.0)) * 1000.0).round() as u64;
-        if let Some(img) = self.frame_cache.get(&key_ms).cloned() {
-            self.touch(key_ms);
+        let key = self.key_for_time(source_time_s);
+        if let Some(img) = self.frame_cache.get(&key).cloned() {
+            self.touch(key);
             return Ok(img);
         }
 
+        if self.prefetch_for_key(key).is_ok()
+            && let Some(img) = self.frame_cache.get(&key).cloned()
+        {
+            self.touch(key);
+            return Ok(img);
+        }
+
+        // Fallback for sparse decode requests where batch prefetch didn't include the key.
         let rgba = media::decode_video_frame_rgba8(&self.info, source_time_s)?;
-        let pixmap = image_premul_bytes_to_pixmap(&rgba, self.info.width, self.info.height)?;
-        let image = vello_cpu::Image {
+        let image = self.rgba_to_image(&rgba)?;
+        self.insert_frame(key, image.clone());
+        Ok(image)
+    }
+
+    fn key_for_time(&self, source_time_s: f64) -> u64 {
+        ((source_time_s.max(0.0)) * 1000.0).round() as u64
+    }
+
+    fn prefetch_for_key(&mut self, key_ms: u64) -> WavyteResult<()> {
+        let source_fps = self.info.source_fps();
+        let step_ms = if source_fps.is_finite() && source_fps > 0.0 {
+            1000.0 / source_fps
+        } else {
+            1.0
+        };
+        let window_ms = (step_ms * self.prefetch_frames as f64).max(step_ms);
+        let bucket = ((key_ms as f64) / window_ms).floor();
+        let start_key_ms = (bucket * window_ms).round().max(0.0) as u64;
+        let start_time_s = (start_key_ms as f64) / 1000.0;
+        let frames =
+            media::decode_video_frames_rgba8(&self.info, start_time_s, self.prefetch_frames)?;
+
+        for (offset, rgba) in frames.iter().enumerate() {
+            let key = ((start_key_ms as f64) + ((offset as f64) * step_ms)).round() as u64;
+            if self.frame_cache.contains_key(&key) {
+                self.touch(key);
+                continue;
+            }
+            let image = self.rgba_to_image(rgba)?;
+            self.insert_frame(key, image);
+        }
+        Ok(())
+    }
+
+    fn rgba_to_image(&self, rgba: &[u8]) -> WavyteResult<vello_cpu::Image> {
+        let pixmap = image_premul_bytes_to_pixmap(rgba, self.info.width, self.info.height)?;
+        Ok(vello_cpu::Image {
             image: vello_cpu::ImageSource::Pixmap(std::sync::Arc::new(pixmap)),
             sampler: vello_cpu::peniko::ImageSampler::default(),
-        };
+        })
+    }
 
-        self.frame_cache.insert(key_ms, image.clone());
-        self.touch(key_ms);
+    fn insert_frame(&mut self, key: u64, image: vello_cpu::Image) {
+        self.frame_cache.insert(key, image);
+        self.touch(key);
         while self.lru.len() > self.capacity {
             if let Some(old) = self.lru.pop_front() {
                 self.frame_cache.remove(&old);
             }
         }
-        Ok(image)
     }
 
     fn touch(&mut self, key: u64) {
@@ -89,10 +146,6 @@ impl CpuBackend {
 
 impl PassBackend for CpuBackend {
     fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()> {
-        if id == SurfaceId(0) {
-            self.surfaces.clear();
-        }
-
         let width_u16: u16 = desc
             .width
             .try_into()
@@ -102,17 +155,34 @@ impl PassBackend for CpuBackend {
             .try_into()
             .map_err(|_| WavyteError::evaluation("surface height exceeds u16"))?;
 
-        let surface = CpuSurface {
-            width: width_u16,
-            height: height_u16,
-            pixmap: vello_cpu::Pixmap::new(width_u16, height_u16),
-        };
-        self.surfaces.insert(id, surface);
+        match self.surfaces.get_mut(&id) {
+            Some(surface) => {
+                if surface.width != width_u16 || surface.height != height_u16 {
+                    *surface = CpuSurface {
+                        width: width_u16,
+                        height: height_u16,
+                        pixmap: vello_cpu::Pixmap::new(width_u16, height_u16),
+                    };
+                }
+            }
+            None => {
+                self.surfaces.insert(
+                    id,
+                    CpuSurface {
+                        width: width_u16,
+                        height: height_u16,
+                        pixmap: vello_cpu::Pixmap::new(width_u16, height_u16),
+                    },
+                );
+            }
+        }
 
-        if id == SurfaceId(0)
-            && let Some([r, g, b, a]) = self.settings.clear_rgba
-        {
-            let premul = premul_rgba8(r, g, b, a);
+        if id == SurfaceId(0) {
+            let premul = self
+                .settings
+                .clear_rgba
+                .map(|[r, g, b, a]| premul_rgba8(r, g, b, a))
+                .unwrap_or([0, 0, 0, 0]);
             let s = self
                 .surfaces
                 .get_mut(&SurfaceId(0))
@@ -284,17 +354,20 @@ impl PassBackend for CpuBackend {
         plan: &crate::compile::RenderPlan,
         _assets: &PreparedAssetStore,
     ) -> WavyteResult<FrameRGBA> {
-        let s = self.surfaces.remove(&surface).ok_or_else(|| {
+        let s = self.surfaces.get(&surface).ok_or_else(|| {
             WavyteError::evaluation(format!(
                 "readback surface {:?} was not initialized",
                 surface
             ))
         })?;
+        let frame_data = s.pixmap.data_as_u8_slice().to_vec();
+        let surface_cap = plan.surfaces.len() as u32;
+        self.surfaces.retain(|id, _| id.0 < surface_cap);
 
         Ok(FrameRGBA {
             width: plan.canvas.width,
             height: plan.canvas.height,
-            data: s.pixmap.data_as_u8_slice().to_vec(),
+            data: frame_data,
             premultiplied: true,
         })
     }

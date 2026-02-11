@@ -1,4 +1,5 @@
 use crate::error::WavyteResult;
+use crate::foundation_math::mul_div255_u8;
 use crate::transitions::WipeDir;
 
 pub type PremulRgba8 = [u8; 4];
@@ -148,7 +149,7 @@ pub struct WipeParams {
 }
 
 fn mul_div255(x: u16, y: u16) -> u8 {
-    (((u32::from(x) * u32::from(y)) + 127) / 255) as u8
+    mul_div255_u8(x, y)
 }
 
 fn add_sat_u8(a: u8, b: u8) -> u8 {

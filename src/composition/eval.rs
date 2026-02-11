@@ -43,7 +43,7 @@ pub struct Evaluator;
 impl Evaluator {
     #[tracing::instrument(skip(comp))]
     pub fn eval_frame(comp: &Composition, frame: FrameIndex) -> WavyteResult<EvaluatedGraph> {
-        Self::eval_frame_with_layout(comp, frame, &crate::LayoutOffsets::default())
+        Self::eval_frame_with_layout_impl(comp, frame, &crate::LayoutOffsets::default(), true)
     }
 
     #[tracing::instrument(skip(comp, layout))]
@@ -52,7 +52,26 @@ impl Evaluator {
         frame: FrameIndex,
         layout: &crate::LayoutOffsets,
     ) -> WavyteResult<EvaluatedGraph> {
-        comp.validate()?;
+        Self::eval_frame_with_layout_impl(comp, frame, layout, true)
+    }
+
+    pub(crate) fn eval_frame_with_layout_unchecked(
+        comp: &Composition,
+        frame: FrameIndex,
+        layout: &crate::LayoutOffsets,
+    ) -> WavyteResult<EvaluatedGraph> {
+        Self::eval_frame_with_layout_impl(comp, frame, layout, false)
+    }
+
+    fn eval_frame_with_layout_impl(
+        comp: &Composition,
+        frame: FrameIndex,
+        layout: &crate::LayoutOffsets,
+        validate_comp: bool,
+    ) -> WavyteResult<EvaluatedGraph> {
+        if validate_comp {
+            comp.validate()?;
+        }
         if frame.0 >= comp.duration.0 {
             return Err(WavyteError::evaluation("frame is out of bounds"));
         }

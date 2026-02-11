@@ -116,20 +116,33 @@ pub fn mix_manifest(manifest: &AudioManifest) -> Vec<f32> {
             {
                 break;
             }
-            let src_frame = (src_sec * f64::from(seg.source_sample_rate)).floor() as usize;
-            if src_frame >= src_frames {
+            let src_pos = src_sec * f64::from(seg.source_sample_rate);
+            if !src_pos.is_finite() || src_pos < 0.0 {
                 break;
             }
+            let src_frame0 = src_pos.floor() as usize;
+            if src_frame0 >= src_frames {
+                break;
+            }
+            let src_frame1 = (src_frame0 + 1).min(src_frames.saturating_sub(1));
+            let frac = (src_pos - src_frame0 as f64) as f32;
 
             let src_gain = fade_gain(seg, rel_sec, seg_len_samples, manifest.sample_rate);
             let gain = src_gain * seg.volume;
             let dst_idx = dst_sample as usize * usize::from(manifest.channels);
             let (l, r) = if seg.source_channels == 1 {
-                let v = src[src_frame];
+                let v0 = src[src_frame0];
+                let v1 = src[src_frame1];
+                let v = v0 + ((v1 - v0) * frac);
                 (v, v)
             } else {
-                let i = src_frame * usize::from(seg.source_channels);
-                (src[i], src[i + 1])
+                let i0 = src_frame0 * usize::from(seg.source_channels);
+                let i1 = src_frame1 * usize::from(seg.source_channels);
+                let l0 = src[i0];
+                let l1 = src[i1];
+                let r0 = src[i0 + 1];
+                let r1 = src[i1 + 1];
+                (l0 + ((l1 - l0) * frac), r0 + ((r1 - r0) * frac))
             };
 
             out[dst_idx] += l * gain;

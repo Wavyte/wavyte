@@ -1,4 +1,4 @@
-use crate::{eval::EvaluatedGraph, model::BlendMode};
+use crate::{eval::EvaluatedGraph, foundation_math::Fnv1a64, model::BlendMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FrameFingerprint {
@@ -119,36 +119,6 @@ fn write_str_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, s: &str) {
     write_u64_pair(a, b, s.len() as u64);
     a.write_bytes(s.as_bytes());
     b.write_bytes(s.as_bytes());
-}
-
-#[derive(Clone, Copy)]
-struct Fnv1a64(u64);
-
-impl Fnv1a64 {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    fn write_u8(&mut self, v: u8) {
-        self.write_bytes(&[v]);
-    }
-
-    fn write_u64(&mut self, v: u64) {
-        self.write_bytes(&v.to_le_bytes());
-    }
-
-    fn write_bytes(&mut self, bytes: &[u8]) {
-        let mut h = self.0;
-        for &b in bytes {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        self.0 = h;
-    }
-
-    fn finish(self) -> u64 {
-        self.0
-    }
 }
 
 #[cfg(test)]

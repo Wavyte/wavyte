@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use crate::{
     asset_store::PreparedAssetStore,
-    compile::compile_frame,
+    compile::{CompileCache, compile_frame_with_cache},
     core::{FrameIndex, FrameRange},
     error::{WavyteError, WavyteResult},
     eval::Evaluator,
@@ -30,9 +30,11 @@ pub fn render_frame(
     backend: &mut dyn RenderBackend,
     assets: &PreparedAssetStore,
 ) -> WavyteResult<FrameRGBA> {
+    comp.validate()?;
     let layout_offsets = crate::resolve_layout_offsets(comp, assets)?;
-    let eval = Evaluator::eval_frame_with_layout(comp, frame, &layout_offsets)?;
-    let plan = compile_frame(comp, &eval, assets)?;
+    let eval = Evaluator::eval_frame_with_layout_unchecked(comp, frame, &layout_offsets)?;
+    let mut compile_cache = CompileCache::default();
+    let plan = compile_frame_with_cache(comp, &eval, assets, &mut compile_cache)?;
     execute_plan(backend, &plan, assets)
 }
 
@@ -85,17 +87,20 @@ pub fn render_frames_with_stats(
     if range.is_empty() {
         return Err(WavyteError::validation("render range must be non-empty"));
     }
+    comp.validate()?;
 
     let len = range.len_frames();
     let mut out = Vec::with_capacity(len.min(4096) as usize);
     let mut stats = RenderStats::default();
     let chunk_size = normalized_chunk_size(threading.chunk_size);
     let layout_offsets = crate::resolve_layout_offsets(comp, assets)?;
+    let mut compile_cache = CompileCache::default();
 
     if !threading.parallel {
         for f in range.start.0..range.end.0 {
-            let eval = Evaluator::eval_frame_with_layout(comp, FrameIndex(f), &layout_offsets)?;
-            let plan = compile_frame(comp, &eval, assets)?;
+            let eval =
+                Evaluator::eval_frame_with_layout_unchecked(comp, FrameIndex(f), &layout_offsets)?;
+            let plan = compile_frame_with_cache(comp, &eval, assets, &mut compile_cache)?;
             out.push(execute_plan(backend, &plan, assets)?);
             stats.frames_total += 1;
             stats.frames_rendered += 1;
@@ -189,6 +194,7 @@ pub fn render_to_mp4_with_stats(
     backend: &mut dyn RenderBackend,
     assets: &PreparedAssetStore,
 ) -> WavyteResult<RenderStats> {
+    comp.validate()?;
     if opts.range.end.0 > comp.duration.0 {
         return Err(WavyteError::validation(
             "render_to_mp4 range must be within composition duration",
@@ -254,6 +260,7 @@ pub fn render_to_mp4_with_stats(
     let mut maybe_pool = None;
     let mut maybe_worker_settings = None;
     let layout_offsets = crate::resolve_layout_offsets(comp, assets)?;
+    let mut compile_cache = CompileCache::default();
     if opts.threading.parallel {
         maybe_pool = Some(build_thread_pool(opts.threading.threads)?);
         maybe_worker_settings = Some(backend.worker_render_settings().ok_or_else(|| {
@@ -269,8 +276,8 @@ pub fn render_to_mp4_with_stats(
         let chunk = FrameRange::new(FrameIndex(chunk_start), FrameIndex(chunk_end))
             .map_err(|e| WavyteError::evaluation(format!("invalid chunk range: {e}")))?;
 
-        let (frames, chunk_stats) = if opts.threading.parallel {
-            render_chunk_parallel_cpu(
+        let chunk_out = if opts.threading.parallel {
+            render_chunk_parallel_cpu_unique(
                 comp,
                 chunk,
                 assets,
@@ -282,16 +289,33 @@ pub fn render_to_mp4_with_stats(
                 &layout_offsets,
             )?
         } else {
-            render_chunk_sequential(comp, chunk, backend, assets, &layout_offsets)?
+            let (frames, stats_chunk) = render_chunk_sequential(
+                comp,
+                chunk,
+                backend,
+                assets,
+                &layout_offsets,
+                &mut compile_cache,
+            )?;
+            let frame_count = frames.len();
+            ChunkParallelOut {
+                unique_frames: frames,
+                frame_to_unique: (0..frame_count).collect(),
+                stats: stats_chunk,
+            }
         };
 
-        for frame in &frames {
-            enc.encode_frame(frame)?;
+        for &u in &chunk_out.frame_to_unique {
+            enc.encode_frame(chunk_out.unique_frames.get(u).ok_or_else(|| {
+                WavyteError::evaluation(
+                    "internal error: unique frame index out of range during encode",
+                )
+            })?)?;
         }
 
-        stats.frames_total += chunk_stats.frames_total;
-        stats.frames_rendered += chunk_stats.frames_rendered;
-        stats.frames_elided += chunk_stats.frames_elided;
+        stats.frames_total += chunk_out.stats.frames_total;
+        stats.frames_rendered += chunk_out.stats.frames_rendered;
+        stats.frames_elided += chunk_out.stats.frames_elided;
         chunk_start = chunk_end;
     }
 
@@ -306,11 +330,13 @@ fn render_chunk_sequential(
     backend: &mut dyn RenderBackend,
     assets: &PreparedAssetStore,
     layout_offsets: &crate::LayoutOffsets,
+    compile_cache: &mut CompileCache,
 ) -> WavyteResult<(Vec<FrameRGBA>, RenderStats)> {
     let mut out = Vec::with_capacity(range.len_frames() as usize);
     for f in range.start.0..range.end.0 {
-        let eval = Evaluator::eval_frame_with_layout(comp, FrameIndex(f), layout_offsets)?;
-        let plan = compile_frame(comp, &eval, assets)?;
+        let eval =
+            Evaluator::eval_frame_with_layout_unchecked(comp, FrameIndex(f), layout_offsets)?;
+        let plan = compile_frame_with_cache(comp, &eval, assets, compile_cache)?;
         out.push(execute_plan(backend, &plan, assets)?);
     }
     let total = range.len_frames();
@@ -324,7 +350,13 @@ fn render_chunk_sequential(
     ))
 }
 
-fn render_chunk_parallel_cpu(
+struct ChunkParallelOut {
+    unique_frames: Vec<FrameRGBA>,
+    frame_to_unique: Vec<usize>,
+    stats: RenderStats,
+}
+
+fn render_chunk_parallel_cpu_unique(
     comp: &Composition,
     range: FrameRange,
     assets: &PreparedAssetStore,
@@ -332,7 +364,7 @@ fn render_chunk_parallel_cpu(
     threading: &RenderThreading,
     pool: &rayon::ThreadPool,
     layout_offsets: &crate::LayoutOffsets,
-) -> WavyteResult<(Vec<FrameRGBA>, RenderStats)> {
+) -> WavyteResult<ChunkParallelOut> {
     #[derive(Clone)]
     struct FrameEval {
         eval: crate::EvaluatedGraph,
@@ -341,7 +373,8 @@ fn render_chunk_parallel_cpu(
 
     let mut evals = Vec::with_capacity(range.len_frames() as usize);
     for f in range.start.0..range.end.0 {
-        let eval = Evaluator::eval_frame_with_layout(comp, FrameIndex(f), layout_offsets)?;
+        let eval =
+            Evaluator::eval_frame_with_layout_unchecked(comp, FrameIndex(f), layout_offsets)?;
         let fingerprint = fingerprint_eval(&eval);
         evals.push(FrameEval { eval, fingerprint });
     }
@@ -371,28 +404,70 @@ fn render_chunk_parallel_cpu(
         unique_indices
             .par_iter()
             .map_init(
-                || crate::render_cpu::CpuBackend::new(settings.clone()),
-                |worker_backend, eval_idx| -> WavyteResult<FrameRGBA> {
+                || {
+                    (
+                        crate::render_cpu::CpuBackend::new(settings.clone()),
+                        CompileCache::default(),
+                    )
+                },
+                |(worker_backend, worker_compile_cache), eval_idx| -> WavyteResult<FrameRGBA> {
                     let eval = &evals[*eval_idx].eval;
-                    let plan = compile_frame(comp, eval, assets)?;
+                    let plan = compile_frame_with_cache(comp, eval, assets, worker_compile_cache)?;
                     worker_backend.render_plan(&plan, assets)
                 },
             )
             .collect::<Vec<_>>()
     });
 
-    let mut unique_frames = Vec::<Option<FrameRGBA>>::with_capacity(rendered.len());
+    let mut unique_frames = Vec::<FrameRGBA>::with_capacity(rendered.len());
     for item in rendered {
-        unique_frames.push(Some(item?));
+        unique_frames.push(item?);
     }
 
+    let total = evals.len() as u64;
+    let rendered_count = unique_indices.len() as u64;
+    Ok(ChunkParallelOut {
+        unique_frames,
+        frame_to_unique,
+        stats: RenderStats {
+            frames_total: total,
+            frames_rendered: rendered_count,
+            frames_elided: total.saturating_sub(rendered_count),
+        },
+    })
+}
+
+fn render_chunk_parallel_cpu(
+    comp: &Composition,
+    range: FrameRange,
+    assets: &PreparedAssetStore,
+    settings: &RenderSettings,
+    threading: &RenderThreading,
+    pool: &rayon::ThreadPool,
+    layout_offsets: &crate::LayoutOffsets,
+) -> WavyteResult<(Vec<FrameRGBA>, RenderStats)> {
+    let chunk_out = render_chunk_parallel_cpu_unique(
+        comp,
+        range,
+        assets,
+        settings,
+        threading,
+        pool,
+        layout_offsets,
+    )?;
+
+    let mut unique_frames = chunk_out
+        .unique_frames
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
     let mut remaining = vec![0usize; unique_frames.len()];
-    for &u in &frame_to_unique {
+    for &u in &chunk_out.frame_to_unique {
         remaining[u] += 1;
     }
 
-    let mut out = Vec::<FrameRGBA>::with_capacity(frame_to_unique.len());
-    for u in frame_to_unique {
+    let mut out = Vec::<FrameRGBA>::with_capacity(chunk_out.frame_to_unique.len());
+    for u in chunk_out.frame_to_unique {
         if remaining[u] == 1 {
             out.push(unique_frames[u].take().ok_or_else(|| {
                 WavyteError::evaluation("internal error: unique frame missing at final take")
@@ -411,17 +486,7 @@ fn render_chunk_parallel_cpu(
         }
         remaining[u] -= 1;
     }
-
-    let total = evals.len() as u64;
-    let rendered_count = unique_indices.len() as u64;
-    Ok((
-        out,
-        RenderStats {
-            frames_total: total,
-            frames_rendered: rendered_count,
-            frames_elided: total.saturating_sub(rendered_count),
-        },
-    ))
+    Ok((out, chunk_out.stats))
 }
 
 fn build_thread_pool(threads: Option<usize>) -> WavyteResult<rayon::ThreadPool> {

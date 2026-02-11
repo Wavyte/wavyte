@@ -51,6 +51,8 @@ mod error;
 mod eval;
 #[path = "render/fingerprint.rs"]
 mod fingerprint;
+#[path = "foundation/math.rs"]
+mod foundation_math;
 #[path = "render/fx.rs"]
 mod fx;
 #[path = "composition/layout.rs"]

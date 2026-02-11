@@ -18,6 +18,14 @@ through a deterministic pipeline:
 - Transition/effect pipeline (`crossfade`, `wipe`, `blur`, inline opacity/transform effects).
 - Chunked parallel rendering with optional static-frame elision.
 - Optional media decode/probe + audio mix/mux via `media-ffmpeg` feature.
+- Hot-loop optimizations in pipeline/backend:
+  - one-time composition validation at render API boundaries,
+  - cached effect/transition parsing during compile,
+  - reusable CPU surfaces across frames/chunks.
+- Improved media behavior:
+  - batched video decode prefetch in CPU backend,
+  - linear-interpolated audio resampling in mixer,
+  - robust ffmpeg stderr draining during encode.
 
 ## Install and prerequisites
 
@@ -159,6 +167,10 @@ Main APIs (`src/render/pipeline.rs`):
 - `render_frames_with_stats(...) -> (Vec<FrameRGBA>, RenderStats)`
 - `render_to_mp4_with_stats(...) -> RenderStats`
 
+Validation behavior:
+- public render APIs validate composition once per call,
+- per-frame hot loops use internal unchecked evaluation after initial validation.
+
 Backend creation:
 
 ```rust
@@ -206,6 +218,12 @@ Preparation behavior:
 - `static_frame_elision`: fingerprint-based dedupe within chunk.
 
 Parallel mode uses worker-local CPU backends and preserves output frame order.
+In MP4 mode, static-frame elision reuses unique rendered frames during encode without cloning
+duplicate frame buffers.
+
+CPU video decode cache knobs (optional env vars):
+- `WAVYTE_VIDEO_CACHE_CAPACITY` (default `64`)
+- `WAVYTE_VIDEO_PREFETCH_FRAMES` (default `12`)
 
 ## Media and audio
 
@@ -228,6 +246,8 @@ Wavyte wraps system `ffmpeg` (`src/render/encode_ffmpeg.rs`):
 - raw RGBA frames streamed to stdin,
 - optional mixed audio input,
 - mp4 output (`libx264`, `yuv420p`, optional `aac`).
+- stderr is drained concurrently and surfaced on non-zero exit.
+- current MP4 API requires integer FPS (`fps.den == 1`) and even frame dimensions.
 
 If `ffmpeg` is unavailable, encoding fails explicitly.
 
@@ -236,6 +256,7 @@ If `ffmpeg` is unavailable, encoding fails explicitly.
 - `src/composition/model.rs`: model + validation.
 - `src/composition/eval.rs`: evaluation.
 - `src/composition/layout.rs`: layout offsets.
+- `src/foundation/math.rs`: shared hash/pixel math helpers.
 - `src/render/compile.rs`: render plan compiler.
 - `src/render/cpu.rs`: CPU backend.
 - `src/render/pipeline.rs`: orchestration APIs.

@@ -1,12 +1,32 @@
+use std::collections::HashMap;
+
 use crate::{
     asset_store::{AssetId, PreparedAsset, PreparedAssetStore},
     core::{Affine, BezPath, Canvas, Rgba8Premul},
-    error::WavyteResult,
+    error::{WavyteError, WavyteResult},
     eval::EvaluatedGraph,
     fx::{PassFx, normalize_effects, parse_effect},
-    model::{BlendMode, Composition, EffectInstance},
+    model::{BlendMode, Composition},
     transitions::{TransitionKind, WipeDir, parse_transition_kind_params},
 };
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct EffectCacheKey {
+    kind: String,
+    params_json: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct TransitionCacheKey {
+    kind: String,
+    params_json: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CompileCache {
+    effect_cache: HashMap<EffectCacheKey, crate::fx::Effect>,
+    transition_cache: HashMap<TransitionCacheKey, TransitionKind>,
+}
 
 #[derive(Clone, Debug)]
 /// Backend-agnostic render plan for a single frame.
@@ -142,6 +162,16 @@ pub fn compile_frame(
     eval: &EvaluatedGraph,
     assets: &PreparedAssetStore,
 ) -> WavyteResult<RenderPlan> {
+    let mut cache = CompileCache::default();
+    compile_frame_with_cache(comp, eval, assets, &mut cache)
+}
+
+pub(crate) fn compile_frame_with_cache(
+    comp: &Composition,
+    eval: &EvaluatedGraph,
+    assets: &PreparedAssetStore,
+    cache: &mut CompileCache,
+) -> WavyteResult<RenderPlan> {
     #[derive(Clone, Debug)]
     struct Layer {
         surface: SurfaceId,
@@ -162,11 +192,7 @@ pub fn compile_frame(
     for (idx, node) in eval.nodes.iter().enumerate() {
         let mut parsed = Vec::with_capacity(node.effects.len());
         for e in &node.effects {
-            let inst = EffectInstance {
-                kind: e.kind.clone(),
-                params: e.params.clone(),
-            };
-            parsed.push(parse_effect(&inst)?);
+            parsed.push(parse_effect_cached(cache, e)?);
         }
         let fx = normalize_effects(&parsed);
 
@@ -271,8 +297,8 @@ pub fn compile_frame(
             if let (Some(out_tr), Some(in_tr)) =
                 (layer.transition_out.as_ref(), next.transition_in.as_ref())
             {
-                let out_kind = parse_transition_kind_params(&out_tr.kind, &out_tr.params).ok();
-                let in_kind = parse_transition_kind_params(&in_tr.kind, &in_tr.params).ok();
+                let out_kind = parse_transition_cached(cache, out_tr).ok();
+                let in_kind = parse_transition_cached(cache, in_tr).ok();
 
                 if let (Some(out_kind), Some(in_kind)) = (out_kind, in_kind) {
                     let t_in = (in_tr.progress as f32).clamp(0.0, 1.0);
@@ -357,6 +383,49 @@ pub fn compile_frame(
         },
         final_surface: SurfaceId(0),
     })
+}
+
+fn parse_effect_cached(
+    cache: &mut CompileCache,
+    effect: &crate::eval::ResolvedEffect,
+) -> WavyteResult<crate::fx::Effect> {
+    let key = EffectCacheKey {
+        kind: effect.kind.clone(),
+        params_json: serde_json::to_string(&effect.params).map_err(|e| {
+            WavyteError::evaluation(format!("effect params serialization failed: {e}"))
+        })?,
+    };
+
+    if let Some(found) = cache.effect_cache.get(&key) {
+        return Ok(found.clone());
+    }
+
+    let parsed = parse_effect(&crate::model::EffectInstance {
+        kind: effect.kind.clone(),
+        params: effect.params.clone(),
+    })?;
+    cache.effect_cache.insert(key, parsed.clone());
+    Ok(parsed)
+}
+
+fn parse_transition_cached(
+    cache: &mut CompileCache,
+    transition: &crate::eval::ResolvedTransition,
+) -> WavyteResult<TransitionKind> {
+    let key = TransitionCacheKey {
+        kind: transition.kind.clone(),
+        params_json: serde_json::to_string(&transition.params).map_err(|e| {
+            WavyteError::evaluation(format!("transition params serialization failed: {e}"))
+        })?,
+    };
+
+    if let Some(found) = cache.transition_cache.get(&key) {
+        return Ok(found.clone());
+    }
+
+    let parsed = parse_transition_kind_params(&transition.kind, &transition.params)?;
+    cache.transition_cache.insert(key, parsed.clone());
+    Ok(parsed)
 }
 
 #[cfg(test)]

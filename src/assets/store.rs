@@ -10,6 +10,7 @@ use crate::{
     assets_decode,
     core::BezPath,
     error::{WavyteError, WavyteResult},
+    foundation_math::Fnv1a64,
     media, model,
 };
 
@@ -269,7 +270,7 @@ impl PreparedAssetStore {
     }
 
     fn hash_id_for_key(kind_tag: u8, key: &AssetKey) -> AssetId {
-        let mut hasher = Fnv1a64::new();
+        let mut hasher = Fnv1a64::new_default();
         hasher.write_u8(kind_tag);
         hasher.write_bytes(key.norm_path.as_bytes());
         hasher.write_u8(0);
@@ -441,31 +442,6 @@ fn parse_svg_path(d: &str) -> WavyteResult<BezPath> {
     }
 
     BezPath::from_svg(d).map_err(|e| WavyteError::validation(format!("invalid svg_path_d: {e}")))
-}
-
-struct Fnv1a64(u64);
-
-impl Fnv1a64 {
-    fn new() -> Self {
-        Self(0xcbf29ce484222325)
-    }
-
-    fn write_u8(&mut self, b: u8) {
-        self.write_bytes(&[b]);
-    }
-
-    fn write_bytes(&mut self, bytes: &[u8]) {
-        let mut h = self.0;
-        for &b in bytes {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        self.0 = h;
-    }
-
-    fn finish(self) -> u64 {
-        self.0
-    }
 }
 
 pub struct TextLayoutEngine {

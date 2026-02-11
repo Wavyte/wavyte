@@ -142,13 +142,32 @@ pub fn decode_video_frame_rgba8(
     source: &VideoSourceInfo,
     source_time_sec: f64,
 ) -> WavyteResult<Vec<u8>> {
+    let mut frames = decode_video_frames_rgba8(source, source_time_sec, 1)?;
+    frames.pop().ok_or_else(|| {
+        WavyteError::evaluation(format!(
+            "ffmpeg returned no video frames for '{}'",
+            source.source_path.display()
+        ))
+    })
+}
+
+#[cfg(feature = "media-ffmpeg")]
+pub(crate) fn decode_video_frames_rgba8(
+    source: &VideoSourceInfo,
+    start_time_sec: f64,
+    frame_count: u32,
+) -> WavyteResult<Vec<Vec<u8>>> {
+    if frame_count == 0 {
+        return Ok(Vec::new());
+    }
+
     let out = std::process::Command::new("ffmpeg")
-        .args(["-v", "error", "-ss", &format!("{source_time_sec:.9}")])
+        .args(["-v", "error", "-ss", &format!("{start_time_sec:.9}")])
         .arg("-i")
         .arg(&source.source_path)
         .args([
             "-frames:v",
-            "1",
+            &frame_count.to_string(),
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -162,20 +181,32 @@ pub fn decode_video_frame_rgba8(
 
     if !out.status.success() {
         return Err(WavyteError::evaluation(format!(
-            "ffmpeg video decode failed for '{}': {}",
+            "ffmpeg video decode batch failed for '{}': {}",
             source.source_path.display(),
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
 
     let expected_len = source.width as usize * source.height as usize * 4;
-    if out.stdout.len() < expected_len {
+    if expected_len == 0 {
+        return Err(WavyteError::evaluation(
+            "decoded video frame size is zero (invalid source dimensions)",
+        ));
+    }
+    if out.stdout.len() < expected_len || !out.stdout.len().is_multiple_of(expected_len) {
         return Err(WavyteError::evaluation(format!(
-            "decoded video frame too small: got {} bytes, expected at least {expected_len}",
+            "decoded video batch has invalid size: got {} bytes, expected multiples of {expected_len}",
             out.stdout.len()
         )));
     }
-    Ok(out.stdout[..expected_len].to_vec())
+
+    let available = (out.stdout.len() / expected_len).min(frame_count as usize);
+    let mut frames = Vec::with_capacity(available);
+    for idx in 0..available {
+        let off = idx * expected_len;
+        frames.push(out.stdout[off..off + expected_len].to_vec());
+    }
+    Ok(frames)
 }
 
 #[cfg(not(feature = "media-ffmpeg"))]
@@ -183,6 +214,17 @@ pub fn decode_video_frame_rgba8(
     _source: &VideoSourceInfo,
     _source_time_sec: f64,
 ) -> WavyteResult<Vec<u8>> {
+    Err(WavyteError::evaluation(
+        "video/audio assets require the 'media-ffmpeg' feature",
+    ))
+}
+
+#[cfg(not(feature = "media-ffmpeg"))]
+pub(crate) fn decode_video_frames_rgba8(
+    _source: &VideoSourceInfo,
+    _start_time_sec: f64,
+    _frame_count: u32,
+) -> WavyteResult<Vec<Vec<u8>>> {
     Err(WavyteError::evaluation(
         "video/audio assets require the 'media-ffmpeg' feature",
     ))

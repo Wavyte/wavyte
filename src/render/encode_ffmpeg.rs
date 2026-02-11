@@ -1,10 +1,12 @@
 use std::{
+    io::Read,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
 };
 
 use crate::{
     error::{WavyteError, WavyteResult},
+    foundation_math::mul_div255_u16,
     render::FrameRGBA,
 };
 
@@ -113,6 +115,7 @@ pub struct FfmpegEncoder {
     bg_rgba: [u8; 4],
     child: Child,
     stdin: Option<ChildStdin>,
+    stderr_drain: Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>,
     scratch: Vec<u8>,
 }
 
@@ -207,6 +210,15 @@ impl FfmpegEncoder {
             .stdin
             .take()
             .ok_or_else(|| WavyteError::evaluation("failed to open ffmpeg stdin (unexpected)"))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| WavyteError::evaluation("failed to open ffmpeg stderr (unexpected)"))?;
+        let stderr_drain = std::thread::spawn(move || {
+            let mut stderr_bytes = Vec::new();
+            stderr.read_to_end(&mut stderr_bytes)?;
+            Ok(stderr_bytes)
+        });
 
         Ok(Self {
             scratch: vec![0u8; (cfg.width * cfg.height * 4) as usize],
@@ -214,6 +226,7 @@ impl FfmpegEncoder {
             bg_rgba,
             child,
             stdin: Some(stdin),
+            stderr_drain: Some(stderr_drain),
         })
     }
 
@@ -260,15 +273,22 @@ impl FfmpegEncoder {
     pub fn finish(mut self) -> WavyteResult<()> {
         drop(self.stdin.take());
 
-        let output = self.child.wait_with_output().map_err(|e| {
+        let status = self.child.wait().map_err(|e| {
             WavyteError::evaluation(format!("failed to wait for ffmpeg to finish: {e}"))
         })?;
+        let stderr_bytes = match self.stderr_drain.take() {
+            Some(handle) => handle
+                .join()
+                .map_err(|_| WavyteError::evaluation("ffmpeg stderr drain thread panicked"))?
+                .map_err(|e| WavyteError::evaluation(format!("ffmpeg stderr read failed: {e}")))?,
+            None => Vec::new(),
+        };
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_bytes);
             return Err(WavyteError::evaluation(format!(
                 "ffmpeg exited with status {}: {}",
-                output.status,
+                status,
                 stderr.trim()
             )));
         }
@@ -327,7 +347,7 @@ fn flatten_to_opaque_rgba8(
 }
 
 fn mul_div255(x: u16, y: u16) -> u16 {
-    (((u32::from(x) * u32::from(y)) + 127) / 255) as u16
+    mul_div255_u16(x, y)
 }
 
 #[cfg(test)]
