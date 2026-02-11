@@ -1,1 +1,1 @@
-pub(crate) mod ffmpeg;
+pub mod ffmpeg;

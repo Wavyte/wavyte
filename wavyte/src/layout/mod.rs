@@ -1,1 +1,1 @@
-pub(crate) mod solver;
+pub mod solver;

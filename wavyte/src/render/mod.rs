@@ -1,4 +1,4 @@
-pub(crate) mod backend;
-pub(crate) mod cpu;
-pub(crate) mod passes;
-pub(crate) mod pipeline;
+pub mod backend;
+pub mod cpu;
+pub mod passes;
+pub mod pipeline;

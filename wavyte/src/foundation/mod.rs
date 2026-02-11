@@ -1,3 +1,3 @@
-pub(crate) mod core;
-pub(crate) mod error;
-pub(crate) mod math;
+pub mod core;
+pub mod error;
+pub mod math;

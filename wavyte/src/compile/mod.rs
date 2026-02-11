@@ -1,2 +1,2 @@
-pub(crate) mod fingerprint;
-pub(crate) mod plan;
+pub mod fingerprint;
+pub mod plan;
