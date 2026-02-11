@@ -37,41 +37,5 @@ impl Ease {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn endpoints_are_stable() {
-        for ease in [
-            Ease::Linear,
-            Ease::InQuad,
-            Ease::OutQuad,
-            Ease::InOutQuad,
-            Ease::InCubic,
-            Ease::OutCubic,
-            Ease::InOutCubic,
-        ] {
-            assert_eq!(ease.apply(0.0), 0.0);
-            assert_eq!(ease.apply(1.0), 1.0);
-        }
-    }
-
-    #[test]
-    fn monotonic_spot_check() {
-        for ease in [
-            Ease::Linear,
-            Ease::InQuad,
-            Ease::OutQuad,
-            Ease::InOutQuad,
-            Ease::InCubic,
-            Ease::OutCubic,
-            Ease::InOutCubic,
-        ] {
-            let a = ease.apply(0.25);
-            let b = ease.apply(0.5);
-            let c = ease.apply(0.75);
-            assert!(a < b);
-            assert!(b < c);
-        }
-    }
-}
+#[path = "../../tests/unit/animation/ease.rs"]
+mod tests;
