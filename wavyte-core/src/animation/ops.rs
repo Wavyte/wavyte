@@ -1,5 +1,6 @@
 use crate::animation::anim::{Anim, Expr, LoopMode};
 
+/// Offset an animation in local clip time by `by_frames`.
 pub fn delay<T>(inner: Anim<T>, by_frames: u64) -> Anim<T> {
     Anim::Expr(Expr::Delay {
         inner: Box::new(inner),
@@ -7,6 +8,7 @@ pub fn delay<T>(inner: Anim<T>, by_frames: u64) -> Anim<T> {
     })
 }
 
+/// Speed up (`factor > 1`) or slow down (`0 < factor < 1`) an animation.
 pub fn speed<T>(inner: Anim<T>, factor: f64) -> Anim<T> {
     Anim::Expr(Expr::Speed {
         inner: Box::new(inner),
@@ -14,6 +16,7 @@ pub fn speed<T>(inner: Anim<T>, factor: f64) -> Anim<T> {
     })
 }
 
+/// Reverse an animation over a fixed `duration_frames` window.
 pub fn reverse<T>(inner: Anim<T>, duration_frames: u64) -> Anim<T> {
     Anim::Expr(Expr::Reverse {
         inner: Box::new(inner),
@@ -21,6 +24,7 @@ pub fn reverse<T>(inner: Anim<T>, duration_frames: u64) -> Anim<T> {
     })
 }
 
+/// Loop an animation over `period_frames` using the selected loop mode.
 pub fn loop_<T>(inner: Anim<T>, period_frames: u64, mode: LoopMode) -> Anim<T> {
     Anim::Expr(Expr::Loop {
         inner: Box::new(inner),
@@ -29,6 +33,7 @@ pub fn loop_<T>(inner: Anim<T>, period_frames: u64, mode: LoopMode) -> Anim<T> {
     })
 }
 
+/// Blend between `a` and `b` using animated blend factor `t`.
 pub fn mix<T>(a: Anim<T>, b: Anim<T>, t: Anim<f64>) -> Anim<T> {
     Anim::Expr(Expr::Mix {
         a: Box::new(a),
@@ -37,6 +42,7 @@ pub fn mix<T>(a: Anim<T>, b: Anim<T>, t: Anim<f64>) -> Anim<T> {
     })
 }
 
+/// Play animation `a`, then switch to `b` at frame `a_len`.
 pub fn sequence(a: Anim<f64>, a_len: u64, b: Anim<f64>) -> Anim<f64> {
     // Switch from `a` to `b` at `a_len`, with `b`'s time remapped so `b` starts at 0
     // when the switch occurs.
@@ -60,6 +66,9 @@ pub fn sequence(a: Anim<f64>, a_len: u64, b: Anim<f64>) -> Anim<f64> {
     mix(a, b_local, t_step)
 }
 
+/// Chain multiple animations with per-animation start offsets.
+///
+/// Offsets are interpreted in local clip frames.
 pub fn stagger(mut anims: Vec<(u64, Anim<f64>)>) -> Anim<f64> {
     anims.sort_by_key(|(offset, _)| *offset);
     let mut iter = anims.into_iter();

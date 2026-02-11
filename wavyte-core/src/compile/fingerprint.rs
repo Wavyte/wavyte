@@ -1,11 +1,17 @@
 use crate::{composition::model::BlendMode, eval::EvaluatedGraph, foundation::math::Fnv1a64};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Deterministic 128-bit fingerprint of an evaluated frame graph.
 pub struct FrameFingerprint {
+    /// High 64 bits.
     pub hi: u64,
+    /// Low 64 bits.
     pub lo: u64,
 }
 
+/// Compute a stable fingerprint for an evaluated frame.
+///
+/// Used by static-frame elision to skip rendering duplicate frame graphs.
 pub fn fingerprint_eval(eval: &EvaluatedGraph) -> FrameFingerprint {
     let mut a = Fnv1a64::new(0xcbf29ce484222325);
     let mut b = Fnv1a64::new(0x9ae16a3b2f90404f);

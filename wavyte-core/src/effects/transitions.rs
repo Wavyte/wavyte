@@ -4,19 +4,33 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Wipe direction used by [`TransitionKind::Wipe`].
 pub enum WipeDir {
+    /// Reveal new clip from left edge toward right.
     LeftToRight,
+    /// Reveal new clip from right edge toward left.
     RightToLeft,
+    /// Reveal new clip from top edge toward bottom.
     TopToBottom,
+    /// Reveal new clip from bottom edge toward top.
     BottomToTop,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// Parsed transition kind used during compile/composite.
 pub enum TransitionKind {
+    /// Linear blend between outgoing/incoming surfaces.
     Crossfade,
-    Wipe { dir: WipeDir, soft_edge: f32 },
+    /// Directional wipe with optional softened boundary.
+    Wipe {
+        /// Wipe travel direction.
+        dir: WipeDir,
+        /// Edge softness in `[0, 1]`.
+        soft_edge: f32,
+    },
 }
 
+/// Parse transition kind and params into a typed representation.
 pub fn parse_transition_kind_params(
     kind: &str,
     params: &serde_json::Value,
@@ -78,6 +92,7 @@ pub fn parse_transition_kind_params(
     }
 }
 
+/// Parse a full [`TransitionSpec`] object.
 pub fn parse_transition(spec: &TransitionSpec) -> WavyteResult<TransitionKind> {
     parse_transition_kind_params(&spec.kind, &spec.params)
 }

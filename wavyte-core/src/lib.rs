@@ -1,6 +1,6 @@
 //! Wavyte is a programmatic video composition and rendering engine.
 //!
-//! Wavyte v0.2.0 focuses on a stable and performant CPU-first pipeline that turns a
+//! Wavyte v0.2.1 focuses on a stable and performant CPU-first pipeline that turns a
 //! timeline (`Composition`) into pixels (`FrameRGBA`) via a backend-agnostic render IR (`RenderPlan`).
 //!
 //! # Pipeline overview
@@ -10,7 +10,7 @@
 //! 3. **Render**: `RenderPlan -> FrameRGBA` (CPU backend)
 //! 4. **Encode** (optional): stream frames to the system `ffmpeg` binary for MP4 output
 //!
-//! The key design constraints in v0.2.0:
+//! The key design constraints in v0.2.1:
 //!
 //! - **No unsafe**: `unsafe` is forbidden in this crate.
 //! - **Deterministic-by-default**: evaluation/compilation are pure and stable for a given input.
@@ -22,6 +22,8 @@
 //! - For end-user usage, see the repository README.
 //! - For a detailed, standalone walkthrough of the API and architecture, see [`crate::guide`].
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
+#![allow(missing_docs_in_private_items)]
 
 mod animation;
 mod assets;
@@ -37,6 +39,7 @@ mod render;
 
 /// High-level, standalone documentation for Wavyte’s concepts and architecture.
 pub mod guide;
+/// Shared transform helpers (linear, affine, non-linear utilities).
 pub mod transform;
 
 pub use animation::anim::{Anim, InterpMode, Keyframe, Keyframes, LoopMode, SampleCtx};

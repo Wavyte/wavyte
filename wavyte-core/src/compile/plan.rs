@@ -60,78 +60,113 @@ pub(crate) struct CompileCache {
 /// The plan is designed to be executable by multiple backends (CPU and GPU) with the same
 /// semantics.
 pub struct RenderPlan {
+    /// Target canvas metadata for this frame.
     pub canvas: Canvas,
+    /// Surface declarations used by pass execution.
     pub surfaces: Vec<SurfaceDesc>,
+    /// Ordered pass list to execute.
     pub passes: Vec<Pass>,
+    /// Surface to read back as final frame.
     pub final_surface: SurfaceId,
 }
 
 #[derive(Clone, Debug)]
 /// A single pass in a [`RenderPlan`].
 pub enum Pass {
+    /// Draw source content to a surface.
     Scene(ScenePass),
+    /// Run an effect pass from input surface to output surface.
     Offscreen(OffscreenPass),
+    /// Composite multiple surfaces into target.
     Composite(CompositePass),
 }
 
 #[derive(Clone, Debug)]
 /// Draw operations into a surface.
 pub struct ScenePass {
+    /// Target surface for all draw ops in this pass.
     pub target: SurfaceId,
+    /// Draw operations in this scene pass.
     pub ops: Vec<DrawOp>,
+    /// Clear target to transparent before drawing when `true`.
     pub clear_to_transparent: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// Identifier for a render surface declared in [`RenderPlan::surfaces`].
-pub struct SurfaceId(pub u32);
+pub struct SurfaceId(
+    /// Raw surface index in [`RenderPlan::surfaces`].
+    pub u32,
+);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Supported pixel formats for render surfaces.
 pub enum PixelFormat {
+    /// Premultiplied RGBA8 pixel format.
     Rgba8Premul,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Surface declaration: dimensions + pixel format.
 pub struct SurfaceDesc {
+    /// Surface width in pixels.
     pub width: u32,
+    /// Surface height in pixels.
     pub height: u32,
+    /// Surface pixel format.
     pub format: PixelFormat,
 }
 
 #[derive(Clone, Debug)]
 /// Run a post-processing effect producing a new surface from an input surface.
 pub struct OffscreenPass {
+    /// Input surface.
     pub input: SurfaceId,
+    /// Output surface.
     pub output: SurfaceId,
+    /// Effect operation to run.
     pub fx: PassFx,
 }
 
 #[derive(Clone, Debug)]
 /// Composite multiple surfaces into a target surface.
 pub struct CompositePass {
+    /// Output surface.
     pub target: SurfaceId,
+    /// Ordered compositing operations.
     pub ops: Vec<CompositeOp>,
 }
 
 #[derive(Clone, Debug)]
 /// A compositing operation between surfaces.
 pub enum CompositeOp {
+    /// Alpha-over `src` onto target with additional opacity multiplier.
     Over {
+        /// Source surface.
         src: SurfaceId,
+        /// Extra opacity multiplier in `[0, 1]`.
         opacity: f32,
     },
+    /// Crossfade between two source surfaces.
     Crossfade {
+        /// Outgoing surface.
         a: SurfaceId,
+        /// Incoming surface.
         b: SurfaceId,
+        /// Crossfade factor in `[0, 1]`.
         t: f32,
     },
+    /// Directional wipe between two surfaces.
     Wipe {
+        /// Outgoing surface.
         a: SurfaceId,
+        /// Incoming surface.
         b: SurfaceId,
+        /// Wipe progress in `[0, 1]`.
         t: f32,
+        /// Wipe direction.
         dir: WipeDir,
+        /// Edge softness in `[0, 1]`.
         soft_edge: f32,
     },
 }
@@ -139,45 +174,78 @@ pub enum CompositeOp {
 #[derive(Clone, Debug)]
 /// Draw operation emitted by the compiler.
 pub enum DrawOp {
+    /// Fill vector path geometry.
     FillPath {
+        /// Path geometry in local space.
         path: BezPath,
+        /// Local-to-canvas transform.
         transform: Affine,
+        /// Fill color in premultiplied RGBA8.
         color: Rgba8Premul,
+        /// Opacity multiplier in `[0, 1]`.
         opacity: f32,
+        /// Blend mode.
         blend: BlendMode,
+        /// Draw order key.
         z: i32,
     },
+    /// Draw prepared bitmap image asset.
     Image {
+        /// Prepared asset identifier.
         asset: AssetId,
+        /// Local-to-canvas transform.
         transform: Affine,
+        /// Opacity multiplier in `[0, 1]`.
         opacity: f32,
+        /// Blend mode.
         blend: BlendMode,
+        /// Draw order key.
         z: i32,
     },
+    /// Draw prepared SVG asset.
     Svg {
+        /// Prepared asset identifier.
         asset: AssetId,
+        /// Local-to-canvas transform.
         transform: Affine,
+        /// Opacity multiplier in `[0, 1]`.
         opacity: f32,
+        /// Blend mode.
         blend: BlendMode,
+        /// Draw order key.
         z: i32,
     },
+    /// Draw prepared text asset.
     Text {
+        /// Prepared asset identifier.
         asset: AssetId,
+        /// Local-to-canvas transform.
         transform: Affine,
+        /// Opacity multiplier in `[0, 1]`.
         opacity: f32,
+        /// Blend mode.
         blend: BlendMode,
+        /// Draw order key.
         z: i32,
     },
+    /// Draw decoded frame from prepared video asset.
     Video {
+        /// Prepared asset identifier.
         asset: AssetId,
+        /// Source media time in seconds.
         source_time_s: f64,
+        /// Local-to-canvas transform.
         transform: Affine,
+        /// Opacity multiplier in `[0, 1]`.
         opacity: f32,
+        /// Blend mode.
         blend: BlendMode,
+        /// Draw order key.
         z: i32,
     },
 }
 
+/// Compile one evaluated frame graph into backend-agnostic render plan.
 pub fn compile_frame(
     comp: &Composition,
     eval: &EvaluatedGraph,

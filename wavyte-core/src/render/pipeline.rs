@@ -52,10 +52,15 @@ pub fn render_frames(
 }
 
 #[derive(Clone, Debug)]
+/// Threading and chunking controls for multi-frame rendering.
 pub struct RenderThreading {
+    /// Enable parallel rendering when `true`.
     pub parallel: bool,
+    /// Chunk size in frames for batched scheduling.
     pub chunk_size: usize,
+    /// Optional explicit worker thread count.
     pub threads: Option<usize>,
+    /// Enable static-frame fingerprint elision in parallel mode.
     pub static_frame_elision: bool,
 }
 
@@ -71,12 +76,17 @@ impl Default for RenderThreading {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Aggregated rendering counters.
 pub struct RenderStats {
+    /// Total requested frames.
     pub frames_total: u64,
+    /// Frames that were actually rendered.
     pub frames_rendered: u64,
+    /// Frames reused via static-frame elision.
     pub frames_elided: u64,
 }
 
+/// Render a frame range and return both frame data and rendering stats.
 pub fn render_frames_with_stats(
     comp: &Composition,
     range: FrameRange,
@@ -174,7 +184,7 @@ impl Default for RenderToMp4Opts {
 /// error if it is not available.
 ///
 /// Notes:
-/// - v0.2.0 currently requires integer FPS (`comp.fps.den == 1`) for MP4 output.
+/// - v0.2.1 currently requires integer FPS (`comp.fps.den == 1`) for MP4 output.
 /// - Frames are rendered as premultiplied RGBA8; the encoder can flatten alpha over `bg_rgba`.
 pub fn render_to_mp4(
     comp: &Composition,
@@ -187,6 +197,7 @@ pub fn render_to_mp4(
     Ok(())
 }
 
+/// Render a frame range to MP4 and return rendering stats.
 pub fn render_to_mp4_with_stats(
     comp: &Composition,
     out_path: impl Into<std::path::PathBuf>,

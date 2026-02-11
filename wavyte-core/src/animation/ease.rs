@@ -1,15 +1,24 @@
+/// Easing functions used to map normalized animation progress.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Ease {
+    /// Linear interpolation.
     Linear,
+    /// Quadratic ease-in.
     InQuad,
+    /// Quadratic ease-out.
     OutQuad,
+    /// Quadratic ease-in/out.
     InOutQuad,
+    /// Cubic ease-in.
     InCubic,
+    /// Cubic ease-out.
     OutCubic,
+    /// Cubic ease-in/out.
     InOutCubic,
 }
 
 impl Ease {
+    /// Apply this easing function to normalized progress `t` in `[0, 1]`.
     pub fn apply(self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         match self {

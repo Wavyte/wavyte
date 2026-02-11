@@ -6,47 +6,71 @@ use crate::{
 };
 
 #[derive(Clone, Debug, serde::Serialize)]
+/// Fully evaluated frame graph before compilation.
 pub struct EvaluatedGraph {
+    /// Evaluated frame index.
     pub frame: FrameIndex,
+    /// Visible clip nodes in painter's order.
     pub nodes: Vec<EvaluatedClipNode>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+/// Evaluated clip node consumed by the compiler.
 pub struct EvaluatedClipNode {
+    /// Clip identifier.
     pub clip_id: String,
+    /// Referenced composition asset key.
     pub asset: String,
+    /// Absolute z-order after track and clip offsets.
     pub z: i32,
+    /// Fully resolved transform matrix.
     pub transform: kurbo::Affine,
+    /// Final intrinsic opacity in `[0, 1]`.
     pub opacity: f64,
+    /// Blend mode for compositing.
     pub blend: BlendMode,
+    /// Source media time (for video clips), if applicable.
     pub source_time_s: Option<f64>,
+    /// Effects copied from clip and validated for compile.
     pub effects: Vec<ResolvedEffect>,
+    /// Optional resolved transition-in state.
     pub transition_in: Option<ResolvedTransition>,
+    /// Optional resolved transition-out state.
     pub transition_out: Option<ResolvedTransition>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+/// Effect instance resolved for a specific evaluated node.
 pub struct ResolvedEffect {
+    /// Canonical effect kind identifier.
     pub kind: String,
+    /// Raw effect parameters.
     pub params: serde_json::Value,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+/// Transition state resolved for a specific frame.
 pub struct ResolvedTransition {
+    /// Canonical transition kind identifier.
     pub kind: String,
+    /// Transition progress in `[0, 1]`.
     pub progress: f64, // 0..1
+    /// Raw transition parameters.
     pub params: serde_json::Value,
 }
 
+/// Stateless evaluator from composition timeline to frame graph.
 pub struct Evaluator;
 
 impl Evaluator {
     #[tracing::instrument(skip(comp))]
+    /// Evaluate one frame using default (zero) layout offsets.
     pub fn eval_frame(comp: &Composition, frame: FrameIndex) -> WavyteResult<EvaluatedGraph> {
         Self::eval_frame_with_layout_impl(comp, frame, &crate::LayoutOffsets::default(), true)
     }
 
     #[tracing::instrument(skip(comp, layout))]
+    /// Evaluate one frame with precomputed layout offsets.
     pub fn eval_frame_with_layout(
         comp: &Composition,
         frame: FrameIndex,

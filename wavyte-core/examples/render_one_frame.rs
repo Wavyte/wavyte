@@ -57,7 +57,7 @@ fn build_comp() -> Composition {
         assets.insert(
             "txt0".to_string(),
             Asset::Text(TextAsset {
-                text: "wavyte v0.2.0".to_string(),
+                text: "wavyte v0.2.1".to_string(),
                 font_source: font,
                 size_px: 42.0,
                 max_width_px: Some(480.0),

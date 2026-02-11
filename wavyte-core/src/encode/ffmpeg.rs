@@ -13,18 +13,28 @@ use crate::{
 /// Configuration for MP4 encoding via the system `ffmpeg` binary.
 #[derive(Clone, Debug)]
 pub struct EncodeConfig {
+    /// Output video width in pixels.
     pub width: u32,
+    /// Output video height in pixels.
     pub height: u32,
+    /// Output frame rate (integer FPS).
     pub fps: u32,
+    /// Output MP4 path.
     pub out_path: PathBuf,
+    /// Overwrite existing output file when `true`.
     pub overwrite: bool,
+    /// Optional external audio input stream configuration.
     pub audio: Option<AudioInputConfig>,
 }
 
 #[derive(Clone, Debug)]
+/// External raw PCM audio input fed into ffmpeg.
 pub struct AudioInputConfig {
+    /// Path to raw interleaved `f32le` audio file.
     pub path: PathBuf,
+    /// Sample rate in Hz.
     pub sample_rate: u32,
+    /// Channel count.
     pub channels: u16,
 }
 

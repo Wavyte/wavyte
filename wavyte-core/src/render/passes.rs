@@ -5,23 +5,29 @@ use crate::{
     render::FrameRGBA,
 };
 
+/// Backend execution interface for individual render pass kinds.
 pub trait PassBackend {
+    /// Ensure backing storage exists for the declared render surface.
     fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()>;
 
+    /// Execute one scene pass that draws source assets into a target surface.
     fn exec_scene(&mut self, pass: &ScenePass, assets: &PreparedAssetStore) -> WavyteResult<()>;
 
+    /// Execute one offscreen effect pass.
     fn exec_offscreen(
         &mut self,
         pass: &OffscreenPass,
         assets: &PreparedAssetStore,
     ) -> WavyteResult<()>;
 
+    /// Execute one composite pass that combines intermediate surfaces.
     fn exec_composite(
         &mut self,
         pass: &CompositePass,
         assets: &PreparedAssetStore,
     ) -> WavyteResult<()>;
 
+    /// Read back final frame pixels from `surface`.
     fn readback_rgba8(
         &mut self,
         surface: SurfaceId,
@@ -30,6 +36,7 @@ pub trait PassBackend {
     ) -> WavyteResult<FrameRGBA>;
 }
 
+/// Execute all passes in a [`RenderPlan`] against a [`PassBackend`].
 pub fn execute_plan<B: PassBackend + ?Sized>(
     backend: &mut B,
     plan: &RenderPlan,

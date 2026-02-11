@@ -7,6 +7,7 @@ use crate::{
     assets::store::{PreparedImage, PreparedSvg},
 };
 
+/// Decode encoded image bytes and convert to premultiplied RGBA8.
 pub fn decode_image(bytes: &[u8]) -> WavyteResult<PreparedImage> {
     let dyn_img = image::load_from_memory(bytes).context("decode image from memory")?;
     let rgba = dyn_img.to_rgba8();
@@ -22,6 +23,7 @@ pub fn decode_image(bytes: &[u8]) -> WavyteResult<PreparedImage> {
     })
 }
 
+/// Parse SVG bytes into a prepared `usvg` tree.
 pub fn parse_svg(bytes: &[u8]) -> WavyteResult<PreparedSvg> {
     let opts = usvg::Options::default();
     let tree = usvg::Tree::from_data(bytes, &opts).context("parse svg tree")?;

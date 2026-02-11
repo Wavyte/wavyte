@@ -5,15 +5,33 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq)]
+/// Parsed effect representation used by compiler normalization.
 pub enum Effect {
-    OpacityMul { value: f32 },
-    TransformPost { value: Affine },
-    Blur { radius_px: u32, sigma: f32 },
+    /// Multiply clip opacity by `value`.
+    OpacityMul {
+        /// Multiplicative opacity factor.
+        value: f32,
+    },
+    /// Post-multiply clip transform with an affine matrix.
+    TransformPost {
+        /// Affine matrix post-multiplied onto clip transform.
+        value: Affine,
+    },
+    /// Gaussian blur pass parameters.
+    Blur {
+        /// Blur radius in pixels.
+        radius_px: u32,
+        /// Standard deviation in pixels.
+        sigma: f32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+/// Inline effects folded directly into draw operation state.
 pub struct InlineFx {
+    /// Multiplicative opacity factor accumulated from effects.
     pub opacity_mul: f32,
+    /// Post-transform matrix accumulated from effects.
     pub transform_post: Affine,
 }
 
@@ -27,16 +45,27 @@ impl Default for InlineFx {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// Effects that require explicit offscreen render passes.
 pub enum PassFx {
-    Blur { radius_px: u32, sigma: f32 },
+    /// Gaussian blur applied to a surface.
+    Blur {
+        /// Blur radius in pixels.
+        radius_px: u32,
+        /// Standard deviation in pixels.
+        sigma: f32,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+/// Normalized effect pipeline for one clip.
 pub struct FxPipeline {
+    /// Inline adjustments applied at compile time.
     pub inline: InlineFx,
+    /// Ordered offscreen passes to execute after scene draw.
     pub passes: Vec<PassFx>,
 }
 
+/// Parse a user-provided effect instance into typed effect data.
 pub fn parse_effect(inst: &EffectInstance) -> WavyteResult<Effect> {
     let kind = inst.kind.trim().to_ascii_lowercase();
     if kind.is_empty() {
@@ -61,7 +90,7 @@ pub fn parse_effect(inst: &EffectInstance) -> WavyteResult<Effect> {
             let radius_px = get_u32(&inst.params, "radius_px")?;
             if radius_px > 256 {
                 return Err(WavyteError::validation(
-                    "Blur.radius_px must be <= 256 in v0.2.0",
+                    "Blur.radius_px must be <= 256 in v0.2.1",
                 ));
             }
             let sigma = match inst.params.get("sigma") {
@@ -85,6 +114,7 @@ pub fn parse_effect(inst: &EffectInstance) -> WavyteResult<Effect> {
     }
 }
 
+/// Fold parsed effects into inline and pass-level representations.
 pub fn normalize_effects(effects: &[Effect]) -> FxPipeline {
     let mut inline = InlineFx::default();
     let mut passes = Vec::<PassFx>::new();

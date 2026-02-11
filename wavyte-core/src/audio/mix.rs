@@ -9,28 +9,46 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
+/// One scheduled audio contribution in timeline sample space.
 pub struct AudioSegment {
+    /// Inclusive start sample in output timeline.
     pub timeline_start_sample: u64,
+    /// Exclusive end sample in output timeline.
     pub timeline_end_sample: u64,
+    /// Source media start time in seconds.
     pub source_start_sec: f64,
+    /// Optional source media cutoff time in seconds.
     pub source_end_sec: Option<f64>,
+    /// Playback rate multiplier applied while sampling source.
     pub playback_rate: f64,
+    /// Linear gain multiplier for this segment.
     pub volume: f32,
+    /// Fade-in duration in seconds.
     pub fade_in_sec: f64,
+    /// Fade-out duration in seconds.
     pub fade_out_sec: f64,
+    /// Source sample rate in Hz.
     pub source_sample_rate: u32,
+    /// Source channel count.
     pub source_channels: u16,
+    /// Source interleaved PCM data.
     pub source_interleaved_f32: Arc<Vec<f32>>,
 }
 
 #[derive(Clone, Debug)]
+/// Audio rendering plan for a timeline frame range.
 pub struct AudioManifest {
+    /// Output sample rate in Hz.
     pub sample_rate: u32,
+    /// Output channel count.
     pub channels: u16,
+    /// Total output samples per channel.
     pub total_samples: u64,
+    /// Scheduled source segments to mix.
     pub segments: Vec<AudioSegment>,
 }
 
+/// Build audio mixing manifest for the given timeline range.
 pub fn build_audio_manifest(
     comp: &Composition,
     assets: &PreparedAssetStore,
@@ -90,6 +108,7 @@ pub fn build_audio_manifest(
     })
 }
 
+/// Mix all manifest segments into interleaved output PCM.
 pub fn mix_manifest(manifest: &AudioManifest) -> Vec<f32> {
     let frames = manifest.total_samples as usize;
     let mut out = vec![0.0f32; frames * usize::from(manifest.channels)];
@@ -158,6 +177,7 @@ pub fn mix_manifest(manifest: &AudioManifest) -> Vec<f32> {
     out
 }
 
+/// Write interleaved `f32` PCM samples to raw little-endian file.
 pub fn write_mix_to_f32le_file(samples_interleaved: &[f32], out_path: &Path) -> WavyteResult<()> {
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
@@ -318,6 +338,7 @@ fn push_segment_common(
     });
 }
 
+/// Convert frame delta to nearest sample index at `sample_rate`.
 pub fn frame_to_sample(frame_delta: u64, fps: Fps, sample_rate: u32) -> u64 {
     let num = u128::from(frame_delta) * u128::from(sample_rate) * u128::from(fps.den);
     let den = u128::from(fps.num);

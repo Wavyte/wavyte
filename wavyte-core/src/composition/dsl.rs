@@ -10,6 +10,7 @@ use crate::{
     foundation::error::{WavyteError, WavyteResult},
 };
 
+/// Builder for [`Composition`](crate::Composition).
 pub struct CompositionBuilder {
     fps: crate::foundation::core::Fps,
     canvas: Canvas,
@@ -20,6 +21,7 @@ pub struct CompositionBuilder {
 }
 
 impl CompositionBuilder {
+    /// Create a builder for a new composition.
     pub fn new(fps: crate::foundation::core::Fps, canvas: Canvas, duration: FrameIndex) -> Self {
         Self {
             fps,
@@ -31,11 +33,13 @@ impl CompositionBuilder {
         }
     }
 
+    /// Set global deterministic seed.
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = seed;
         self
     }
 
+    /// Insert an asset under unique key.
     pub fn asset(mut self, key: impl Into<String>, asset: Asset) -> WavyteResult<Self> {
         let key = key.into();
         if self.assets.contains_key(&key) {
@@ -47,11 +51,13 @@ impl CompositionBuilder {
         Ok(self)
     }
 
+    /// Append a track to the composition.
     pub fn track(mut self, track: Track) -> Self {
         self.tracks.push(track);
         self
     }
 
+    /// Convenience helper to add a [`VideoAsset`](crate::VideoAsset).
     pub fn video_asset(
         self,
         key: impl Into<String>,
@@ -60,6 +66,7 @@ impl CompositionBuilder {
         self.asset(key, Asset::Video(video_asset(source)))
     }
 
+    /// Convenience helper to add an [`AudioAsset`](crate::AudioAsset).
     pub fn audio_asset(
         self,
         key: impl Into<String>,
@@ -68,6 +75,7 @@ impl CompositionBuilder {
         self.asset(key, Asset::Audio(audio_asset(source)))
     }
 
+    /// Build and validate final [`Composition`](crate::Composition).
     pub fn build(self) -> WavyteResult<Composition> {
         let comp = Composition {
             fps: self.fps,
@@ -82,6 +90,7 @@ impl CompositionBuilder {
     }
 }
 
+/// Create video asset configuration with default trims/playback controls.
 pub fn video_asset(source: impl Into<String>) -> VideoAsset {
     VideoAsset {
         source: source.into(),
@@ -95,6 +104,7 @@ pub fn video_asset(source: impl Into<String>) -> VideoAsset {
     }
 }
 
+/// Create audio asset configuration with default trims/playback controls.
 pub fn audio_asset(source: impl Into<String>) -> AudioAsset {
     AudioAsset {
         source: source.into(),
@@ -108,6 +118,7 @@ pub fn audio_asset(source: impl Into<String>) -> AudioAsset {
     }
 }
 
+/// Builder for [`Track`](crate::Track) values.
 pub struct TrackBuilder {
     name: String,
     z_base: i32,
@@ -121,6 +132,7 @@ pub struct TrackBuilder {
 }
 
 impl TrackBuilder {
+    /// Create a track builder with required `name`.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -135,42 +147,50 @@ impl TrackBuilder {
         }
     }
 
+    /// Set base z-order for all clips in track.
     pub fn z_base(mut self, z: i32) -> Self {
         self.z_base = z;
         self
     }
 
+    /// Append clip to the track.
     pub fn clip(mut self, clip: Clip) -> Self {
         self.clips.push(clip);
         self
     }
 
+    /// Set track layout mode.
     pub fn layout_mode(mut self, mode: crate::LayoutMode) -> Self {
         self.layout_mode = mode;
         self
     }
 
+    /// Set inter-item gap in pixels for stack/grid layouts.
     pub fn layout_gap_px(mut self, gap: f64) -> Self {
         self.layout_gap_px = gap;
         self
     }
 
+    /// Set track layout padding.
     pub fn layout_padding(mut self, padding: crate::Edges) -> Self {
         self.layout_padding = padding;
         self
     }
 
+    /// Set horizontal and vertical alignment for layout placement.
     pub fn layout_align(mut self, x: crate::LayoutAlignX, y: crate::LayoutAlignY) -> Self {
         self.layout_align_x = x;
         self.layout_align_y = y;
         self
     }
 
+    /// Set number of columns for grid layout.
     pub fn layout_grid_columns(mut self, columns: u32) -> Self {
         self.layout_grid_columns = columns;
         self
     }
 
+    /// Build validated [`Track`](crate::Track).
     pub fn build(self) -> WavyteResult<Track> {
         if self.name.trim().is_empty() {
             return Err(WavyteError::validation("track name must be non-empty"));
@@ -189,6 +209,7 @@ impl TrackBuilder {
     }
 }
 
+/// Builder for [`Clip`](crate::Clip) values.
 pub struct ClipBuilder {
     id: String,
     asset_key: String,
@@ -203,6 +224,7 @@ pub struct ClipBuilder {
 }
 
 impl ClipBuilder {
+    /// Create clip builder with required identifiers and frame range.
     pub fn new(id: impl Into<String>, asset_key: impl Into<String>, range: FrameRange) -> Self {
         Self {
             id: id.into(),
@@ -218,36 +240,43 @@ impl ClipBuilder {
         }
     }
 
+    /// Set per-clip z-offset.
     pub fn z_offset(mut self, z: i32) -> Self {
         self.z_offset = z;
         self
     }
 
+    /// Set animated opacity.
     pub fn opacity(mut self, a: Anim<f64>) -> Self {
         self.opacity = a;
         self
     }
 
+    /// Set animated transform.
     pub fn transform(mut self, t: Anim<Transform2D>) -> Self {
         self.transform = t;
         self
     }
 
+    /// Append effect instance.
     pub fn effect(mut self, fx: EffectInstance) -> Self {
         self.effects.push(fx);
         self
     }
 
+    /// Set transition-in specification.
     pub fn transition_in(mut self, tr: TransitionSpec) -> Self {
         self.transition_in = Some(tr);
         self
     }
 
+    /// Set transition-out specification.
     pub fn transition_out(mut self, tr: TransitionSpec) -> Self {
         self.transition_out = Some(tr);
         self
     }
 
+    /// Build validated [`Clip`](crate::Clip).
     pub fn build(self) -> WavyteResult<Clip> {
         if self.id.trim().is_empty() {
             return Err(WavyteError::validation("clip id must be non-empty"));

@@ -1,4 +1,4 @@
-//! # Wavyte guide (v0.2.0)
+//! # Wavyte guide (v0.2.1)
 //!
 //! This module is a standalone, end-to-end walkthrough of Wavyte’s architecture and public API.
 //! It is intentionally detailed so future phases (and external integrations) can build on a shared
@@ -141,7 +141,7 @@
 //!
 //! ## Asset paths and validation
 //!
-//! For assets that reference external files (`Image`, `Svg`, `Text` font sources), v0.2.0 enforces:
+//! For assets that reference external files (`Image`, `Svg`, `Text` font sources), v0.2.1 enforces:
 //!
 //! - **relative** paths (no leading `/`)
 //! - OS-agnostic separators (`\` normalized to `/`)
@@ -177,7 +177,7 @@
 //! - an ordered list of passes
 //! - draw operations and composites expressed in terms of stable asset IDs
 //!
-//! In v0.2.0, the plan uses these pass types:
+//! In v0.2.1, the plan uses these pass types:
 //!
 //! - [`ScenePass`](crate::ScenePass)
 //! - [`OffscreenPass`](crate::OffscreenPass) (currently used for blur)
@@ -192,7 +192,7 @@
 //! - a blend mode (currently only [`BlendMode::Normal`](crate::BlendMode))
 //! - an integer `z` used for ordering within a pass
 //!
-//! v0.2.0 draw ops:
+//! v0.2.1 draw ops:
 //!
 //! - `FillPath`:
 //!   - the local coordinate space is the SVG path coordinates parsed into a [`BezPath`](crate::BezPath)
@@ -202,16 +202,16 @@
 //!   - the `transform` maps pixel space into canvas space
 //! - `Svg`:
 //!   - the asset is a `usvg::Tree` (vector)
-//!   - v0.2.0: rasterized via `resvg` into a pixmap (premultiplied RGBA8), then drawn as an image
+//!   - v0.2.1: rasterized via `resvg` into a pixmap (premultiplied RGBA8), then drawn as an image
 //!   - note: we intentionally rasterize SVG via `resvg` for predictable SVG `<text>` correctness.
 //! - `Text`:
 //!   - the asset is a prepared Parley layout
 //!   - glyph positioning originates in the Parley layout coordinate space; the op `transform`
 //!     positions it in canvas space
 //!
-//! ### Effects and transitions (v0.2.0)
+//! ### Effects and transitions (v0.2.1)
 //!
-//! v0.2.0 supports a small set of effects and transitions, chosen specifically to validate the
+//! v0.2.1 supports a small set of effects and transitions, chosen specifically to validate the
 //! multi-pass architecture.
 //!
 //! - Effects:
@@ -248,7 +248,11 @@
 //! - powered by `vello_cpu`
 //! - SVG is supported by rasterizing `usvg::Tree` via `resvg` into an RGBA pixmap
 //!
-//! Wavyte v0.2 focuses on CPU rendering only.
+//! Wavyte v0.2.1 focuses on CPU rendering only.
+//!
+//! Parallel rendering is available via [`RenderThreading`](crate::RenderThreading), including
+//! optional static-frame elision using [`FrameFingerprint`](crate::FrameFingerprint) to skip
+//! duplicate frame graphs in chunked parallel runs.
 //!
 //! ---
 //!

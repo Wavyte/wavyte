@@ -10,6 +10,7 @@ use crate::{
     render::{FrameRGBA, RenderBackend, RenderSettings},
 };
 
+/// CPU renderer implementation backed by `vello_cpu`.
 pub struct CpuBackend {
     settings: RenderSettings,
     image_cache: HashMap<AssetId, vello_cpu::Image>,
@@ -132,6 +133,7 @@ impl VideoFrameDecoder {
 }
 
 impl CpuBackend {
+    /// Construct a CPU backend with the provided render settings.
     pub fn new(settings: RenderSettings) -> Self {
         Self {
             settings,

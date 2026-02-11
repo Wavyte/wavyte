@@ -5,12 +5,16 @@ use crate::{
     foundation::error::WavyteResult,
 };
 
+/// Precomputed per-track/per-clip placement offsets from layout solving.
 #[derive(Clone, Debug, Default)]
 pub struct LayoutOffsets {
     per_track: Vec<Vec<Vec2>>,
 }
 
 impl LayoutOffsets {
+    /// Get precomputed `(x, y)` layout offset for a clip.
+    ///
+    /// Unknown indices return `(0, 0)` to keep evaluation resilient.
     pub fn offset_for(&self, track_idx: usize, clip_idx: usize) -> Vec2 {
         self.per_track
             .get(track_idx)
@@ -20,6 +24,9 @@ impl LayoutOffsets {
     }
 }
 
+/// Resolve per-clip layout offsets for all tracks in a composition.
+///
+/// Offsets are additive translations applied before each clip's own transform.
 pub fn resolve_layout_offsets(
     comp: &Composition,
     assets: &PreparedAssetStore,

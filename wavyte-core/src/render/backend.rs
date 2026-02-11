@@ -7,11 +7,13 @@ use crate::{
 
 /// A rendered frame as RGBA8 pixels.
 ///
-/// In Wavyte v0.2.0, frames are **premultiplied alpha** by default. The `premultiplied` flag is
+/// In Wavyte v0.2.1, frames are **premultiplied alpha** by default. The `premultiplied` flag is
 /// included to make this explicit at API boundaries.
 #[derive(Clone, Debug)]
 pub struct FrameRGBA {
+    /// Frame width in pixels.
     pub width: u32,
+    /// Frame height in pixels.
     pub height: u32,
     /// RGBA8 bytes, tightly packed, row-major.
     pub data: Vec<u8>,
@@ -24,6 +26,7 @@ pub struct FrameRGBA {
 /// Most users do not call [`RenderBackend::render_plan`] directly; prefer [`crate::render_frame`]
 /// and friends, which handle evaluation and compilation.
 pub trait RenderBackend: PassBackend {
+    /// Execute a backend-agnostic [`RenderPlan`] and read back final frame.
     fn render_plan(
         &mut self,
         plan: &RenderPlan,
@@ -32,6 +35,9 @@ pub trait RenderBackend: PassBackend {
         execute_plan(self, plan, assets)
     }
 
+    /// Return backend settings required to construct equivalent worker backends.
+    ///
+    /// This is used by parallel rendering paths.
     fn worker_render_settings(&self) -> Option<RenderSettings> {
         None
     }
@@ -42,6 +48,7 @@ pub trait RenderBackend: PassBackend {
 /// - `Cpu` is always available.
 #[derive(Clone, Copy, Debug)]
 pub enum BackendKind {
+    /// CPU raster backend powered by `vello_cpu`.
     Cpu,
 }
 

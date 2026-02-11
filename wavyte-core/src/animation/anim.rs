@@ -6,14 +6,24 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug)]
+/// Sampling context provided to animation evaluators.
+///
+/// It carries both absolute timeline coordinates and clip-local coordinates so expressions can
+/// choose the most appropriate space.
 pub struct SampleCtx {
-    pub frame: FrameIndex,                 // global frame
+    /// Absolute frame index in composition timeline.
+    pub frame: FrameIndex, // global frame
+    /// Global composition frame rate.
     pub fps: crate::foundation::core::Fps, // global fps
-    pub clip_local: FrameIndex,            // frame - clip.start
-    pub seed: u64,                         // deterministic seed for procs
+    /// Clip-local frame index (`frame - clip.range.start`).
+    pub clip_local: FrameIndex, // frame - clip.start
+    /// Deterministic seed used by procedural sources.
+    pub seed: u64, // deterministic seed for procs
 }
 
+/// Interpolation contract for animation value types.
 pub trait Lerp: Sized {
+    /// Interpolate from `a` to `b` with normalized factor `t` in `[0, 1]`.
     fn lerp(a: &Self, b: &Self, t: f64) -> Self;
 }
 
@@ -63,10 +73,14 @@ impl Lerp for crate::foundation::core::Rgba8Premul {
     }
 }
 
+/// Generic animation node supporting keyframed, procedural, and expression sources.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Anim<T> {
+    /// Piecewise animation defined by explicit keyframes.
     Keyframes(Keyframes<T>),
+    /// Deterministic procedural animation source.
     Procedural(Procedural<T>),
+    /// Animation expression composed from other animations.
     Expr(Expr<T>),
 }
 
@@ -74,6 +88,7 @@ impl<T> Anim<T>
 where
     T: Lerp + Clone + ProcValue,
 {
+    /// Build a constant animation that always returns `value`.
     pub fn constant(value: T) -> Self {
         Self::Keyframes(Keyframes {
             keys: vec![Keyframe {
@@ -86,6 +101,7 @@ where
         })
     }
 
+    /// Sample animation value at the given context.
     pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
         match self {
             Self::Keyframes(kf) => kf.sample(ctx),
@@ -94,6 +110,7 @@ where
         }
     }
 
+    /// Validate static invariants for this animation tree.
     pub fn validate(&self) -> WavyteResult<()> {
         match self {
             Self::Keyframes(kf) => kf.validate(),
@@ -104,16 +121,21 @@ where
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// Keyframed animation with optional default value.
 pub struct Keyframes<T> {
+    /// Keyframes sorted by `frame`.
     pub keys: Vec<Keyframe<T>>, // sorted by frame
-    pub mode: InterpMode,       // linear/hold
-    pub default: Option<T>,     // value when no keys exist
+    /// Interpolation mode between adjacent keyframes.
+    pub mode: InterpMode, // linear/hold
+    /// Value used when `keys` is empty.
+    pub default: Option<T>, // value when no keys exist
 }
 
 impl<T> Keyframes<T>
 where
     T: Lerp + Clone,
 {
+    /// Validate keyframe ordering and default/fallback requirements.
     pub fn validate(&self) -> WavyteResult<()> {
         if self.keys.is_empty() && self.default.is_none() {
             return Err(WavyteError::animation(
@@ -128,6 +150,7 @@ where
         Ok(())
     }
 
+    /// Sample keyframed value in clip-local time.
     pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
         if self.keys.is_empty() {
             return self
@@ -163,47 +186,75 @@ where
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// One keyframe in a keyframed animation.
 pub struct Keyframe<T> {
+    /// Clip-local frame index for this key.
     pub frame: FrameIndex,
+    /// Value at `frame`.
     pub value: T,
+    /// Easing function applied toward the next keyframe.
     pub ease: Ease, // ease applied toward next key
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+/// Interpolation strategy between keyframes.
 pub enum InterpMode {
+    /// Hold the previous key value until the next keyframe.
     Hold,
+    /// Interpolate between keyframes using [`Ease`].
     Linear,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// Composable animation expression operators.
 pub enum Expr<T> {
+    /// Delay an animation by `by` frames.
     Delay {
+        /// Inner animation.
         inner: Box<Anim<T>>,
+        /// Delay amount in frames.
         by: u64,
     },
+    /// Remap time by multiplying local frame index by `factor`.
     Speed {
+        /// Inner animation.
         inner: Box<Anim<T>>,
+        /// Time scale factor (`> 0`).
         factor: f64,
     }, // factor>0
+    /// Reverse local time over a fixed duration.
     Reverse {
+        /// Inner animation.
         inner: Box<Anim<T>>,
+        /// Reverse window length in frames.
         duration: u64,
     }, // duration in frames
+    /// Loop local time over `period` using a loop mode.
     Loop {
+        /// Inner animation.
         inner: Box<Anim<T>>,
+        /// Loop period in frames (`> 0`).
         period: u64,
+        /// Loop mapping strategy.
         mode: LoopMode,
     },
+    /// Blend two animations with animated blend factor `t`.
     Mix {
+        /// First input animation.
         a: Box<Anim<T>>,
+        /// Second input animation.
         b: Box<Anim<T>>,
+        /// Blend factor animation in `[0, 1]`.
         t: Box<Anim<f64>>,
     },
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+/// Looping strategy used by the loop expression variant.
 pub enum LoopMode {
+    /// Wrap at the period boundary.
     Repeat,
+    /// Bounce forward/backward across the period.
     PingPong,
 }
 
@@ -211,6 +262,7 @@ impl<T> Expr<T>
 where
     T: Lerp + Clone + ProcValue,
 {
+    /// Validate expression-specific invariants recursively.
     pub fn validate(&self) -> WavyteResult<()> {
         match self {
             Self::Delay { inner, by: _ } => inner.validate(),
@@ -244,6 +296,7 @@ where
         }
     }
 
+    /// Sample this expression by remapping local frame coordinates.
     pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
         fn with_clip_local(mut ctx: SampleCtx, clip_local: FrameIndex) -> SampleCtx {
             let delta = clip_local.0 as i128 - ctx.clip_local.0 as i128;
