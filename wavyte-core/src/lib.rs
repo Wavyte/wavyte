@@ -23,7 +23,6 @@
 //! - For a detailed, standalone walkthrough of the API and architecture, see [`crate::guide`].
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-#![allow(missing_docs_in_private_items)]
 
 mod animation;
 mod assets;
