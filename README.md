@@ -1,4 +1,4 @@
-# wavyte (v0.2.0)
+# wavyte (v0.2.1)
 
 Programmatic video composition and rendering in Rust.
 
@@ -10,7 +10,12 @@ through a deterministic pipeline:
 3. Execute passes on the CPU backend.
 4. Optionally encode MP4 through system `ffmpeg`.
 
-## What you get in v0.2
+Repository layout is now a Cargo workspace:
+- `wavyte-core`: engine/library crate (exports crate name `wavyte`).
+- `wavyte-cli`: CLI crate (binary `wavyte`).
+- `bench`: standalone benchmark crate.
+
+## What you get in v0.2.1
 
 - Immutable prepared asset store (`PreparedAssetStore`) with deterministic asset IDs.
 - CPU rendering backend (`vello_cpu`) with premultiplied RGBA semantics.
@@ -18,6 +23,15 @@ through a deterministic pipeline:
 - Transition/effect pipeline (`crossfade`, `wipe`, `blur`, inline opacity/transform effects).
 - Chunked parallel rendering with optional static-frame elision.
 - Optional media decode/probe + audio mix/mux via `media-ffmpeg` feature.
+- Hot-loop optimizations in pipeline/backend:
+  - one-time composition validation at render API boundaries,
+  - cached effect/transition parsing during compile with hashed cache keys,
+  - fingerprints computed only when static-frame elision is enabled,
+  - reusable CPU surfaces across frames/chunks.
+- Improved media behavior:
+  - batched video decode prefetch in CPU backend,
+  - linear-interpolated audio resampling in mixer,
+  - robust ffmpeg stderr draining during encode.
 
 ## Install and prerequisites
 
@@ -39,18 +53,18 @@ ffprobe -version
 Run examples:
 
 ```bash
-cargo run --example render_crossfade_png
-cargo run --example render_blur_png
-cargo run --example render_remotion_hello_world_mp4
-cargo run --example render_aesthetic_motion_mp4
-cargo run --example render_aesthetic_fx_mp4
-cargo run --example render_aesthetic_layout_mp4
+cargo run -p wavyte-core --example render_crossfade_png
+cargo run -p wavyte-core --example render_blur_png
+cargo run -p wavyte-core --example render_remotion_hello_world_mp4
+cargo run -p wavyte-core --example render_aesthetic_motion_mp4
+cargo run -p wavyte-core --example render_aesthetic_fx_mp4
+cargo run -p wavyte-core --example render_aesthetic_layout_mp4
 ```
 
 Full media/layout example (`media-ffmpeg` feature):
 
 ```bash
-cargo run --features media-ffmpeg --example render_full_gamut_media_layout_mp4
+cargo run -p wavyte-core --features media-ffmpeg --example render_full_gamut_media_layout_mp4
 ```
 
 Examples write outputs into repo-local `assets/`.
@@ -60,13 +74,13 @@ Examples write outputs into repo-local `assets/`.
 Render one PNG frame from JSON:
 
 ```bash
-cargo run --bin wavyte -- frame --in comp.json --frame 0 --out out.png
+cargo run -p wavyte-cli --bin wavyte -- frame --in comp.json --frame 0 --out out.png
 ```
 
 Render MP4 from JSON:
 
 ```bash
-cargo run --bin wavyte -- render --in comp.json --out out.mp4
+cargo run -p wavyte-cli --bin wavyte -- render --in comp.json --out out.mp4
 ```
 
 Diagnostics:
@@ -140,7 +154,7 @@ Save as `comp.json`:
 Render:
 
 ```bash
-cargo run --bin wavyte -- frame --in comp.json --frame 0 --out out.png
+cargo run -p wavyte-cli --bin wavyte -- frame --in comp.json --frame 0 --out out.png
 ```
 
 ## Library usage
@@ -153,11 +167,15 @@ Core units:
 - `RenderPlan`: backend-agnostic pass graph.
 - `RenderBackend`: pass executor.
 
-Main APIs (`src/render/pipeline.rs`):
+Main APIs (`wavyte-core/src/render/pipeline.rs`):
 
 - `render_frame(...) -> FrameRGBA`
 - `render_frames_with_stats(...) -> (Vec<FrameRGBA>, RenderStats)`
 - `render_to_mp4_with_stats(...) -> RenderStats`
+
+Validation behavior:
+- public render APIs validate composition once per call,
+- per-frame hot loops use internal unchecked evaluation after initial validation.
 
 Backend creation:
 
@@ -206,13 +224,19 @@ Preparation behavior:
 - `static_frame_elision`: fingerprint-based dedupe within chunk.
 
 Parallel mode uses worker-local CPU backends and preserves output frame order.
+In MP4 mode, static-frame elision reuses unique rendered frames during encode without cloning
+duplicate frame buffers.
+
+CPU video decode cache knobs (optional env vars):
+- `WAVYTE_VIDEO_CACHE_CAPACITY` (default `64`)
+- `WAVYTE_VIDEO_PREFETCH_FRAMES` (default `12`)
 
 ## Media and audio
 
 Enable with:
 
 ```bash
-cargo run --features media-ffmpeg --example render_full_gamut_media_layout_mp4
+cargo run -p wavyte-core --features media-ffmpeg --example render_full_gamut_media_layout_mp4
 ```
 
 Capabilities:
@@ -223,27 +247,32 @@ Capabilities:
 
 ## MP4 encoding
 
-Wavyte wraps system `ffmpeg` (`src/render/encode_ffmpeg.rs`):
+Wavyte wraps system `ffmpeg` (`wavyte-core/src/encode/ffmpeg.rs`):
 
 - raw RGBA frames streamed to stdin,
 - optional mixed audio input,
 - mp4 output (`libx264`, `yuv420p`, optional `aac`).
+- stderr is drained concurrently and surfaced on non-zero exit.
+- current MP4 API requires integer FPS (`fps.den == 1`) and even frame dimensions.
 
 If `ffmpeg` is unavailable, encoding fails explicitly.
 
 ## Project layout
 
-- `src/composition/model.rs`: model + validation.
-- `src/composition/eval.rs`: evaluation.
-- `src/composition/layout.rs`: layout offsets.
-- `src/render/compile.rs`: render plan compiler.
-- `src/render/cpu.rs`: CPU backend.
-- `src/render/pipeline.rs`: orchestration APIs.
-- `src/render/encode_ffmpeg.rs`: encoder wrapper.
-- `src/assets/store.rs`: prepared asset store.
-- `src/assets/media.rs`: media probe/decode.
-- `src/audio/mix.rs`: audio manifest/mix.
-- `src/bin/wavyte.rs`: CLI.
+- `wavyte-core/src/foundation/`: errors, core types, shared math/hash helpers.
+- `wavyte-core/src/animation/`: anim/ease/procedural/ops.
+- `wavyte-core/src/transform/`: linear, affine, non-linear helper modules.
+- `wavyte-core/src/effects/`: effect parse/normalize + blur/composite/transitions.
+- `wavyte-core/src/layout/`: layout solver.
+- `wavyte-core/src/composition/`: model + DSL builders.
+- `wavyte-core/src/eval/`: evaluator/frame graph.
+- `wavyte-core/src/compile/`: render IR/plan + fingerprinting.
+- `wavyte-core/src/render/`: backends, pass execution, CPU impl, pipeline.
+- `wavyte-core/src/audio/`: manifest/mixer.
+- `wavyte-core/src/encode/`: ffmpeg encoder wrapper.
+- `wavyte-core/src/assets/`: asset prepare/decode/media/raster helpers.
+- `wavyte-cli/src/main.rs`: CLI entrypoint.
+- `bench/src/main.rs`: standalone benchmark harness.
 - `EXPLANATION.md`: exhaustive architecture deep dive.
 
 ## Release readiness gate
@@ -256,7 +285,7 @@ Recommended gate:
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features --release
-cargo test --manifest-path bench/Cargo.toml --release
+cargo test -p wavyte-bench --release
 ```
 
 ## License

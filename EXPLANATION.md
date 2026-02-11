@@ -1,10 +1,10 @@
-# Wavyte v0.2.0 - EXPLANATION.md (end-to-end codebase walkthrough)
+# Wavyte v0.2.1 - EXPLANATION.md (end-to-end codebase walkthrough)
 
-This document is the authoritative v0.2 code walkthrough for the current `src/` tree.
+This document is the authoritative v0.2.1 code walkthrough for the current `wavyte-core/src/` tree.
 
 Scope:
 - Explain the runtime architecture end-to-end.
-- Explain every `src/` file and the purpose of each struct/enum/impl/function group.
+- Explain every `wavyte-core/src/` file and the purpose of each struct/enum/impl/function group.
 - Explain how data flows through evaluate -> compile -> render -> encode, and where audio/layout/media fit.
 - Provide an auditable symbol appendix generated from the current tree.
 
@@ -13,7 +13,8 @@ Non-goals:
 - This is not a proposal doc for future versions.
 
 Version/context snapshot:
-- Crate: `wavyte` `0.2.0`
+- Workspace crates: `wavyte-core`, `wavyte-cli`, `wavyte-bench`
+- Library crate name (from `wavyte-core`): `wavyte` `0.2.1`
 - Rust: edition `2024`, `rust-version = 1.93`
 - Backend in-tree: CPU (`vello_cpu`)
 - Optional media decode: feature `media-ffmpeg`
@@ -31,11 +32,11 @@ At runtime, Wavyte is a staged pipeline with deterministic boundaries:
 - External bytes and parse/decode work are front-loaded into immutable `PreparedAssetStore`.
 - Renderers are intentionally IO-free.
 
-3. Layout + evaluation (`composition/layout.rs` + `composition/eval.rs`)
+3. Layout + evaluation (`layout/solver.rs` + `eval/evaluator.rs`)
 - Track-level layout computes offsets from intrinsic asset dimensions.
 - Frame evaluation produces visible nodes with sampled anims and resolved transitions.
 
-4. Compilation (`render/compile.rs`)
+4. Compilation (`compile/plan.rs`)
 - Evaluated graph -> backend-agnostic `RenderPlan` (surfaces + passes + ops).
 
 5. Pass execution (`render/passes.rs` + `render/cpu.rs`)
@@ -45,7 +46,7 @@ At runtime, Wavyte is a staged pipeline with deterministic boundaries:
 - Single-frame, frame-range, and MP4 rendering.
 - Optional chunked parallel rendering with static-frame elision via fingerprinting.
 
-7. Encoding (`render/encode_ffmpeg.rs`)
+7. Encoding (`encode/ffmpeg.rs`)
 - Stream RGBA frames into `ffmpeg` stdin and write MP4.
 - Optional mixed audio is piped as f32le side input.
 
@@ -175,12 +176,14 @@ eval_clip transform composition:
 
 ```text
 CpuBackend
-├── surfaces: HashMap<SurfaceId, CpuSurface>
+├── surfaces: HashMap<SurfaceId, CpuSurface> (reused across frames/chunks)
 ├── image_cache: AssetId -> vello_cpu::Image
 ├── svg_cache: (AssetId,width,height) -> vello_cpu::Image
 ├── font_cache: AssetId -> FontData
 └── video_decoders: AssetId -> VideoFrameDecoder
-    └── tiny LRU frame cache keyed by rounded source milliseconds
+    ├── frame cache + LRU keyed by rounded source milliseconds
+    ├── cache capacity from `WAVYTE_VIDEO_CACHE_CAPACITY` (default 64)
+    └── decode prefetch window from `WAVYTE_VIDEO_PREFETCH_FRAMES` (default 12)
 ```
 
 #### 1.1.7 Parallel chunk rendering with optional static-frame elision
@@ -191,24 +194,30 @@ FrameRange [start,end)
    +-- split into chunks (chunk_size)
           |
           +-- for each chunk:
-                eval all frames -> fingerprints
+                eval all frames
                 |
                 +-- if static_frame_elision=off:
                 |      unique_indices = all frames
+                |      (no fingerprint computation)
                 |
                 +-- if static_frame_elision=on:
+                       compute fingerprint per evaluated frame
                        unique_indices = first occurrence per fingerprint
                        frame_to_unique maps each timeline frame to unique slot
                 |
                 +-- rayon pool renders unique frames in parallel
                 |
-                +-- reconstruct full ordered frame vector by clone/reuse
+                +-- `render_frames*`: reconstruct full ordered frame vector (clone/move reuse)
+                +-- `render_to_mp4*`: stream by `frame_to_unique` map without cloning duplicates
 ```
 
 #### 1.1.8 Audio and MP4 orchestration flow
 
 ```text
 render_to_mp4_with_stats()
+  |
+  +-- comp.validate() once
+  +-- resolve_layout_offsets() once
   |
   +-- build_audio_manifest(range)
   |      includes AudioAsset + VideoAsset audio tracks
@@ -222,7 +231,9 @@ render_to_mp4_with_stats()
   |      input #1: optional f32le audio file
   |      output  : MP4 (libx264 + yuv420p [+ aac if audio])
   |
-  +-- render frames chunk-by-chunk
+  +-- render chunk-by-chunk:
+  |      sequential: shared backend + rolling CompileCache
+  |      parallel: worker-local backend + worker-local CompileCache
   +-- flatten premul alpha over bg color
   +-- stream frame bytes to ffmpeg stdin
   +-- finish() and remove temp file
@@ -230,25 +241,33 @@ render_to_mp4_with_stats()
 
 ## 2. Module map and dependency shape
 
-`src/lib.rs` wires modules by domain folders:
-- `foundation/*`: core primitives and error type.
-- `animation/*`: animation sampling model, easing, expression ops, procedural sources.
-- `composition/*`: timeline model, DSL builders, layout resolution, frame evaluation.
+`wavyte-core/src/lib.rs` wires modules by domain folders:
+- `foundation/*`: core primitives, shared error type, and shared math/hash helpers.
+- `animation/*`: animation sampling model, easing, ops, procedural sources.
+- `transform/*`: linear/affine/non-linear transform helpers.
+- `composition/*`: timeline model and DSL builders.
+- `layout/*`: track layout resolution.
+- `eval/*`: per-frame evaluation.
+- `compile/*`: render IR/plan compiler and fingerprinting.
+- `effects/*`: transitions, effect parse/normalize, blur/composite kernels.
 - `assets/*`: decode/raster/media helpers and immutable prepared store.
-- `render/*`: IR, compiler, pass runner, CPU backend, effects/transitions/composite/blur, pipeline.
+- `render/*`: pass runner, backend abstraction, CPU backend, pipeline orchestration.
 - `audio/*`: audio manifest construction and mixing.
-- `src/bin/wavyte.rs`: CLI.
-- `src/guide.rs`: crate-level high-level guide.
+- `encode/*`: ffmpeg encoder wrapper.
+- `wavyte-cli/src/main.rs`: CLI.
+- `wavyte-core/src/guide.rs`: crate-level high-level guide.
 
-The crate is `#![forbid(unsafe_code)]`.
+The library crate is `#![forbid(unsafe_code)]`.
+Module wiring uses idiomatic per-folder `mod.rs` files (no `#[path = ...]` indirection).
 
 Dependency direction (coarse, conceptual):
 
 ```text
-foundation/*  <----------------------------------------------+
+foundation/*  <---------------------------------------------------+
    ^                                                           |
    |                                                           |
-animation/* --> composition/model+eval+dsl+layout ------------+--> render/compile+pipeline
+animation/* --> composition/model+dsl + layout + eval --------+--> compile + render/pipeline
+transform/* ------------------------------^                    |
    ^                                                           |          |
    |                                                           |          v
    +---------------------------- assets/* ---------------------+     render/backend+passes+cpu
@@ -257,12 +276,12 @@ animation/* --> composition/model+eval+dsl+layout ------------+--> render/compil
                                  |
                                  +--> media decode/probe (feature-gated)
 
-render/pipeline --> render/encode_ffmpeg --> system ffmpeg process
-src/bin/wavyte (CLI) depends on public lib surface
+render/pipeline --> encode/ffmpeg --> system ffmpeg process
+wavyte-cli (CLI) depends on public lib surface
 ```
 
 Compile-time boundary summary:
-- Pure data/math path: `foundation`, `animation`, most of `composition`, `render/compile`.
+- Pure data/math path: `foundation`, `animation`, `transform`, most of `composition/layout/eval`, `compile`.
 - IO/decode boundary: `assets/store`, `assets/media`, `audio/mix` temp-file write, encoder process spawn.
 - Backend execution boundary: `render/passes` trait + `render/cpu` implementation.
 
@@ -284,11 +303,11 @@ Compile-time boundary summary:
 
 4. Validation first
 - `Composition::validate` enforces path/media/layout/timeline invariants.
-- Most entry APIs call validation or rely on validated composition.
+- Render APIs validate once at API boundary and then use unchecked per-frame evaluation internally.
 
-## 4. File-by-file walkthrough (src/)
+## 4. File-by-file walkthrough (`wavyte-core/src/` + `wavyte-cli/src/`)
 
-### 4.1 `src/foundation/error.rs`
+### 4.1 `wavyte-core/src/foundation/error.rs`
 Purpose:
 - Define crate-wide error and result aliases.
 
@@ -308,7 +327,7 @@ Impl/functions:
 Tests:
 - Prefix stability and wrapped-source propagation.
 
-### 4.2 `src/foundation/core.rs`
+### 4.2 `wavyte-core/src/foundation/core.rs`
 Purpose:
 - Shared geometry/time/pixel primitives.
 
@@ -329,7 +348,15 @@ Functions/impl:
 - `Rgba8Premul::transparent`, `from_straight_rgba`.
 - `Transform2D::to_affine` (translate * anchor * rotate * scale * unanchor).
 
-### 4.3 `src/animation/ease.rs`
+### 4.2.1 `wavyte-core/src/foundation/math.rs`
+Purpose:
+- Shared low-level math/hash helpers used by multiple modules.
+
+Types/functions:
+- `Fnv1a64` seeded hasher used for deterministic IDs/fingerprints.
+- `mul_div255_u16` and `mul_div255_u8` fixed-point helpers for premultiplied pixel math.
+
+### 4.3 `wavyte-core/src/animation/ease.rs`
 Purpose:
 - Easing curves used by keyframe interpolation and transitions.
 
@@ -339,7 +366,7 @@ Types:
 Functions:
 - `Ease::apply(t)` clamps `t` to `[0,1]` and applies selected curve.
 
-### 4.4 `src/animation/proc.rs`
+### 4.4 `wavyte-core/src/animation/proc.rs`
 Purpose:
 - Procedural animation source family.
 
@@ -364,7 +391,7 @@ Functions/impl:
 Note:
 - Some error strings still mention `v0.1` in source text, but behavior is current.
 
-### 4.5 `src/animation/anim.rs`
+### 4.5 `wavyte-core/src/animation/anim.rs`
 Purpose:
 - Core typed animation model and expression runtime.
 
@@ -388,7 +415,7 @@ Functions/impl:
 - `Expr::validate`, `Expr::sample`.
 - Internal helper in sampling: `with_clip_local` remaps both `clip_local` and corresponding global frame.
 
-### 4.6 `src/animation/ops.rs`
+### 4.6 `wavyte-core/src/animation/ops.rs`
 Purpose:
 - Ergonomic constructors around `Anim::Expr`.
 
@@ -397,7 +424,16 @@ Functions:
 - `sequence(a, a_len, b)` builds step-like switch with delayed `b`.
 - `stagger(Vec<(offset, Anim<f64>)>)` sorts by offsets and chains via `sequence`.
 
-### 4.7 `src/composition/model.rs`
+### 4.6.1 `wavyte-core/src/transform/*`
+Purpose:
+- Host transform-domain helper modules used for future separation of linear/affine/non-linear concerns.
+
+Files:
+- `wavyte-core/src/transform/linear.rs`: vector interpolation helpers (`lerp_vec2`).
+- `wavyte-core/src/transform/affine.rs`: affine composition/identity helpers.
+- `wavyte-core/src/transform/non_linear.rs`: non-linear utility helpers (`clamp01`).
+
+### 4.7 `wavyte-core/src/composition/model.rs`
 Purpose:
 - Canonical timeline data model + validation rules.
 
@@ -438,7 +474,7 @@ Validation flow:
   - `validate_media_controls`.
 - `TransitionSpec::validate` ensures kind non-empty, positive duration, params null/object.
 
-### 4.8 `src/composition/dsl.rs`
+### 4.8 `wavyte-core/src/composition/dsl.rs`
 Purpose:
 - Programmatic builder DSL over model types.
 
@@ -458,7 +494,7 @@ Functions/impl:
 - `ClipBuilder`:
   - `new`, `z_offset`, `opacity`, `transform`, `effect`, `transition_in`, `transition_out`, `build`.
 
-### 4.9 `src/composition/layout.rs`
+### 4.9 `wavyte-core/src/layout/solver.rs`
 Purpose:
 - Resolve track-level layout offsets from intrinsic asset sizes.
 
@@ -478,7 +514,7 @@ Functions:
   - `align_offset` generic start/center/end logic.
   - `AlignKind` and `From<LayoutAlignX/Y>` conversions.
 
-### 4.10 `src/composition/eval.rs`
+### 4.10 `wavyte-core/src/eval/evaluator.rs`
 Purpose:
 - Per-frame evaluation from timeline to visible render nodes.
 
@@ -494,6 +530,10 @@ Functions:
 - `Evaluator::eval_frame` delegates to layout-aware evaluation with default offsets.
 - `Evaluator::eval_frame_with_layout`:
   - validates composition.
+  - delegates to shared implementation (`eval_frame_with_layout_impl`).
+- `Evaluator::eval_frame_with_layout_unchecked` (internal):
+  - skips composition validation for hot loops after API-boundary validation.
+- Shared implementation:
   - bounds-check frame.
   - collects visible clips.
   - computes node sort key `(z, track_index, clip_start, clip_id)`.
@@ -504,7 +544,7 @@ Functions:
   - `resolve_transition_window` (computes transition progress on edge window).
   - `stable_hash64(seed, clip_id)`.
 
-### 4.11 `src/assets/decode.rs`
+### 4.11 `wavyte-core/src/assets/decode.rs`
 Purpose:
 - Raw bytes -> prepared image/svg helper decode.
 
@@ -515,7 +555,7 @@ Functions:
   - parses via `usvg::Tree::from_data` default options.
 - Internal: `premultiply_rgba8_in_place`.
 
-### 4.12 `src/assets/svg_raster.rs`
+### 4.12 `wavyte-core/src/assets/svg_raster.rs`
 Purpose:
 - Convert SVG vectors to raster pixmaps with scaling-aware sizing.
 
@@ -530,7 +570,7 @@ Functions:
   - returns adjusted transform to draw rasterized result in original scene space.
 - `rasterize_svg_to_premul_rgba8(tree, width, height)` via `resvg`/`tiny_skia`.
 
-### 4.13 `src/assets/media.rs`
+### 4.13 `wavyte-core/src/assets/media.rs`
 Purpose:
 - Media probing/decoding and timeline->source time mapping.
 
@@ -546,11 +586,12 @@ Functions:
 - Feature-gated decode/probe (`media-ffmpeg`):
   - `probe_video` using `ffprobe` JSON.
   - `decode_video_frame_rgba8` via `ffmpeg -f rawvideo -pix_fmt rgba`.
+  - `decode_video_frames_rgba8` batched decode helper (crate-internal) used by CPU prefetch.
   - `decode_audio_f32_stereo` via `ffmpeg` f32le decode; gracefully returns empty PCM for no-audio streams.
 - Non-feature stubs return evaluation errors.
 - Internal helper under feature: `parse_ff_ratio`.
 
-### 4.14 `src/assets/store.rs`
+### 4.14 `wavyte-core/src/assets/store.rs`
 Purpose:
 - Immutable prepared asset store with deterministic ID/keying.
 
@@ -590,7 +631,7 @@ Prepared asset types:
 Identity/keying:
 - `AssetId(u64)` with `from_u64`, `as_u64`.
 - `AssetKey { norm_path, params }` with sorted params.
-- Internal hasher `Fnv1a64` for stable IDs.
+- Shared `foundation/math.rs::Fnv1a64` hasher for stable IDs.
 
 Store:
 - `PreparedAssetStore { root, ids_by_key, assets_by_id }`.
@@ -622,7 +663,7 @@ Text layout engine:
   - `last_family_name`.
   - `layout_plain(text, font_bytes, size, brush, max_width)` via Parley.
 
-### 4.15 `src/render/transitions.rs`
+### 4.15 `wavyte-core/src/effects/transitions.rs`
 Purpose:
 - Parse transition kinds and params into typed runtime variants.
 
@@ -638,7 +679,7 @@ Details:
 - Accepts aliases for wipe direction (`ltr`, `rtl`, `ttb`, `btt`, etc).
 - `soft_edge` is clamped `[0,1]` and must be finite.
 
-### 4.16 `src/render/fx.rs`
+### 4.16 `wavyte-core/src/effects/fx.rs`
 Purpose:
 - Parse effect instances and normalize into inline vs pass pipeline.
 
@@ -664,13 +705,13 @@ Functions:
 - Internal param parsing helpers:
   - `get_u32`, `get_f32`, `parse_affine`.
 
-### 4.17 `src/render/fingerprint.rs`
+### 4.17 `wavyte-core/src/compile/fingerprint.rs`
 Purpose:
 - Hash evaluated frame content for static-frame elision.
 
 Types:
 - `FrameFingerprint { hi, lo }` dual-hash tuple.
-- Internal `Fnv1a64` hasher.
+- Shared `foundation/math.rs::Fnv1a64` hasher.
 
 Functions:
 - `fingerprint_eval(eval)` hashes all semantically relevant node fields:
@@ -680,7 +721,7 @@ Functions:
 - Pair-write helpers:
   - `write_u8_pair`, `write_u64_pair`, `write_i64_pair`, `write_str_pair`.
 
-### 4.18 `src/render/compile.rs`
+### 4.18 `wavyte-core/src/compile/plan.rs`
 Purpose:
 - Compile evaluated graph into backend-agnostic render IR.
 
@@ -731,23 +772,26 @@ IR types:
 - `DrawOp`:
   - `FillPath`, `Image`, `Svg`, `Text`, `Video`.
 
-Function:
+Functions:
 - `compile_frame(comp, eval, assets)`:
+  - convenience wrapper that creates a fresh `CompileCache`.
+- `compile_frame_with_cache(comp, eval, assets, cache)` (crate-internal hot path):
   - starts with final surface 0.
   - for each evaluated node:
-    - parse/normalize effects.
+    - parse effects through cache (`parse_effect_cached`) using hashed keys plus equality-checked buckets (avoids per-lookup JSON string serialization).
     - combine clip opacity with inline opacity effect.
     - apply inline transform post.
     - map asset type -> draw op.
     - scene pass renders node into its own layer surface.
     - pass effects append offscreen passes chaining surfaces.
   - transition composition stage:
+    - parses transitions through the same hashed/equality-checked cache strategy (`parse_transition_cached`).
     - tries pairing adjacent layers when outgoing/incoming transition kinds align and progress is near-equal.
     - emits single `Crossfade` or `Wipe` op for paired transitions.
     - otherwise emits `Over` with in/out attenuation.
   - appends final composite pass targeting surface 0.
 
-### 4.19 `src/render/composite.rs`
+### 4.19 `wavyte-core/src/effects/composite.rs`
 Purpose:
 - Premultiplied-alpha CPU compositing primitives.
 
@@ -764,9 +808,9 @@ Functions:
   - `crossfade_over_in_place(dst, a, b, t)`
   - `wipe_over_in_place(dst, a, b, params)`
 - Helpers:
-  - `mul_div255`, `add_sat_u8`, `smoothstep`.
+  - `mul_div255` (delegates to `foundation/math.rs`), `add_sat_u8`, `smoothstep`.
 
-### 4.20 `src/render/blur.rs`
+### 4.20 `wavyte-core/src/effects/blur.rs`
 Purpose:
 - CPU separable Gaussian blur on premultiplied RGBA8 buffers.
 
@@ -777,7 +821,7 @@ Functions:
   - `horizontal_pass`, `vertical_pass`.
   - `q16_to_u8`.
 
-### 4.21 `src/render/passes.rs`
+### 4.21 `wavyte-core/src/render/passes.rs`
 Purpose:
 - Generic pass execution contract shared by backends.
 
@@ -795,7 +839,7 @@ Functions:
   - executes pass list in order.
   - reads back final surface into `FrameRGBA`.
 
-### 4.22 `src/render/backend.rs`
+### 4.22 `wavyte-core/src/render/backend.rs`
 Purpose:
 - Backend abstraction and factory.
 
@@ -810,7 +854,7 @@ Types:
 Functions:
 - `create_backend(kind, settings)` -> boxed backend (`CpuBackend`).
 
-### 4.23 `src/render/cpu.rs`
+### 4.23 `wavyte-core/src/render/cpu.rs`
 Purpose:
 - CPU backend implementation using `vello_cpu` plus project-specific raster/composite logic.
 
@@ -818,7 +862,7 @@ Visual (pass execution over surfaces):
 
 ```text
 ensure_surface(id, desc)
-  -> allocate CpuSurface pixmap
+  -> allocate or reuse CpuSurface pixmap (resize only when dimensions change)
   -> optional clear on final surface 0
 
 ScenePass(target=T, ops=[...])
@@ -839,6 +883,7 @@ CompositePass(target=0, ops=[...])
        Wipe      -> wipe_over_in_place(dst, a, b, params)
 
 readback_rgba8(final_surface)
+  -> retain only surfaces declared in current plan (drop stale extras)
   -> FrameRGBA { premultiplied=true }
 ```
 
@@ -846,7 +891,11 @@ Core types:
 - `CpuBackend` caches and surfaces:
   - `image_cache`, `svg_cache`, `font_cache`, `video_decoders`, `surfaces`.
 - `CpuSurface { width, height, pixmap }`.
-- `VideoFrameDecoder` with tiny LRU by rounded milliseconds.
+- `VideoFrameDecoder`:
+  - frame cache + LRU by rounded milliseconds.
+  - `capacity` from env `WAVYTE_VIDEO_CACHE_CAPACITY` (default `64`).
+  - `prefetch_frames` from env `WAVYTE_VIDEO_PREFETCH_FRAMES` (default `12`).
+  - prefetch path uses batched `decode_video_frames_rgba8`.
 
 PassBackend impl:
 - `ensure_surface`:
@@ -859,9 +908,10 @@ PassBackend impl:
   - currently handles blur pass.
   - supports in-place and separate input/output cases.
 - `exec_composite`:
-  - applies `Over`, `Crossfade`, `Wipe` by calling `render/composite.rs`.
+  - applies `Over`, `Crossfade`, `Wipe` by calling `effects/composite.rs`.
 - `readback_rgba8`:
   - converts target pixmap to `FrameRGBA`.
+  - trims stale surfaces not used by the just-executed plan.
 
 RenderBackend impl:
 - `worker_render_settings` returns cloneable settings (required for parallel workers).
@@ -880,7 +930,7 @@ Draw path internals:
 - Asset-specific cache loaders:
   - `image_paint_for`, `font_for_text_asset`, `svg_paint_for`, `video_paint_for`.
 
-### 4.24 `src/audio/mix.rs`
+### 4.24 `wavyte-core/src/audio/mix.rs`
 Purpose:
 - Build an audio segment manifest from timeline clips and mix to stereo float PCM.
 
@@ -918,7 +968,8 @@ Functions:
   - extracts audio from `AudioAsset` and `VideoAsset` (if prepared video has audio).
   - computes source/timeline mapping and fades.
 - `mix_manifest(manifest)`:
-  - resamples by nearest floor sample index with playback-rate mapping.
+  - maps timeline sample -> source position via playback rate.
+  - performs linear interpolation between adjacent source samples.
   - applies fades and volume.
   - sums overlapping segments and clamps to `[-1, 1]`.
 - `write_mix_to_f32le_file(samples, out_path)`.
@@ -928,7 +979,7 @@ Functions:
   - `frame_to_sample` (rounded rational conversion).
   - `intersect_ranges`.
 
-### 4.25 `src/render/encode_ffmpeg.rs`
+### 4.25 `wavyte-core/src/encode/ffmpeg.rs`
 Purpose:
 - Streaming MP4 encoder wrapper over system `ffmpeg` process.
 
@@ -950,7 +1001,7 @@ FrameRGBA (possibly premul alpha)
 Types:
 - `EncodeConfig { width, height, fps, out_path, overwrite, audio }`.
 - `AudioInputConfig { path, sample_rate, channels }`.
-- `FfmpegEncoder { cfg, bg_rgba, child, stdin, scratch }`.
+- `FfmpegEncoder { cfg, bg_rgba, child, stdin, stderr_drain, scratch }`.
 
 Functions/impl:
 - `EncodeConfig::validate`:
@@ -964,15 +1015,16 @@ Functions/impl:
 - `FfmpegEncoder::new`:
   - validates config, checks ffmpeg availability, builds command line.
   - supports optional f32le audio input + AAC output.
+  - starts background stderr drain thread to avoid blocked stderr pipe.
 - `encode_frame`:
   - dimension checks.
   - flattens alpha into opaque RGBA scratch buffer.
   - writes to ffmpeg stdin.
-- `finish` waits for process and validates status.
+- `finish` closes stdin, waits for process, joins stderr drain, and validates status.
 - Internal flattening helpers:
   - `flatten_to_opaque_rgba8`, `mul_div255`.
 
-### 4.26 `src/render/pipeline.rs`
+### 4.26 `wavyte-core/src/render/pipeline.rs`
 Purpose:
 - High-level render orchestration APIs (single frame, batch, MP4) including parallel/chunk modes.
 
@@ -985,12 +1037,15 @@ render_frames_with_stats(parallel=true)
   +-- split requested range into chunk windows
   +-- per chunk:
        eval all frames sequentially in caller thread
-       fingerprint each evaluated frame
-       dedupe by fingerprint (optional)
+       if static_frame_elision:
+         fingerprint each evaluated frame
+         dedupe by fingerprint
+       else:
+         treat all evaluated frames as unique (no fingerprint pass)
        rayon workers:
          for each unique eval
            local CpuBackend(settings clone)
-           compile_frame + render_plan
+           compile_frame_with_cache(worker-local cache) + render_plan
        reconstruct original order
        accumulate RenderStats
 ```
@@ -1002,32 +1057,37 @@ Public types:
 
 Public functions:
 - `render_frame`:
-  - resolve layout -> eval -> compile -> execute.
+  - validates composition once.
+  - resolve layout -> eval (unchecked) -> compile (cache-backed) -> execute.
 - `render_frames` wrapper over `render_frames_with_stats`.
 - `render_frames_with_stats`:
+  - validates composition once.
   - sequential or parallel chunk flow.
-  - in sequential mode uses shared backend.
+  - in sequential mode uses shared backend + rolling `CompileCache`.
   - parallel mode requires backend worker settings and threadpool.
 - `render_to_mp4` wrapper over `render_to_mp4_with_stats`.
 - `render_to_mp4_with_stats`:
-  - validates range/fps.
+  - validates composition once, then validates range/fps.
   - checks ffmpeg availability.
   - builds/mixes temporary audio input if needed.
   - chunk-renders frames and streams them into encoder.
+  - parallel MP4 path keeps unique frames + `frame_to_unique` mapping and encodes without cloning duplicate frame buffers.
 
 Internal functions:
 - `render_chunk_sequential`.
-- `render_chunk_parallel_cpu`:
+- `render_chunk_parallel_cpu_unique`:
   - evaluates all frames in chunk.
-  - computes fingerprints.
-  - optional static-frame elision by deduplicating identical fingerprints.
+  - computes fingerprints only when `static_frame_elision` is enabled.
+  - when elision is disabled, skips fingerprinting and treats all frames as unique.
   - renders unique frames in parallel via rayon `map_init` worker backends.
-  - reconstructs original frame order by cloning/reusing unique frames.
+  - returns unique frame vector + frame-to-unique mapping.
+- `render_chunk_parallel_cpu`:
+  - adapter used by `render_frames_with_stats` that reconstructs ordered output by clone/move reuse.
 - `build_thread_pool`.
 - `normalized_chunk_size`.
 - `TempFileGuard` deletes temp audio file on drop.
 
-### 4.27 `src/bin/wavyte.rs`
+### 4.27 `wavyte-cli/src/main.rs`
 Purpose:
 - CLI entrypoint for JSON composition rendering.
 
@@ -1054,7 +1114,7 @@ Functions:
   - `sha256_hex`.
   - `count_svg_text_nodes`.
 
-### 4.28 `src/guide.rs`
+### 4.28 `wavyte-core/src/guide.rs`
 Purpose:
 - Narrative rustdoc module introducing architecture and usage.
 
@@ -1063,7 +1123,7 @@ Content:
 - Documents no-IO renderer rule and premultiplied alpha contract.
 - Includes minimal no-run example using DSL + CPU backend.
 
-### 4.29 `src/lib.rs`
+### 4.29 `wavyte-core/src/lib.rs`
 Purpose:
 - Crate root, module wiring, and public re-export surface.
 
@@ -1077,6 +1137,7 @@ Responsibilities:
 
 1. Track layout is resolved once per API call and injected into eval.
 - `render_frame`, `render_frames_with_stats`, and `render_to_mp4_with_stats` all resolve layout offsets before evaluation loops/chunks.
+- These APIs also validate composition once up front, then run unchecked eval in frame hot loops.
 
 2. Parallel rendering parallelizes eval+compile+render for unique frames, not encoding.
 - Encoding still runs in caller thread, so encode cost can dominate at higher resolutions.
@@ -1084,13 +1145,16 @@ Responsibilities:
 3. Static-frame elision is fingerprint-based.
 - Only exact evaluated-scene matches are deduped.
 - Output ordering remains stable even when deduping.
+- When `static_frame_elision` is disabled, the parallel path skips fingerprint computation.
 
 4. SVG rendering path is raster cache keyed by `(asset_id, raster_w, raster_h)`.
 - Transform scale affects raster size selection.
 - Prevents repeated costly vector rasterization for identical scale contexts.
 
-5. Video frame caching in CPU backend is small LRU keyed by rounded milliseconds.
-- Helps repeated/reused timestamps.
+5. Video frame caching in CPU backend is tunable and prefetches in batches.
+- Keys are rounded milliseconds.
+- `WAVYTE_VIDEO_CACHE_CAPACITY` and `WAVYTE_VIDEO_PREFETCH_FRAMES` control cache/prefetch windows.
+- Batched decode reduces ffmpeg process churn for temporally local access.
 
 6. Audio path is separate from visual rendering.
 - Audio manifest/mix happens before ffmpeg spawn path in MP4 rendering.
@@ -1098,14 +1162,14 @@ Responsibilities:
 
 ## 6. Known source-level wording drift
 
-There are a few source comments/error strings that still say `v0.1` while living in v0.2 code. They do not change behavior but can confuse readers. Notable locations include:
+There are a few source comments/error strings that still say `v0.1` while living in v0.2.1 code. They do not change behavior but can confuse readers. Notable locations include:
 - `animation/proc.rs` unsupported type error text.
-- `render/fx.rs` blur radius text.
+- `effects/fx.rs` blur radius text.
 - some doc comments in render modules.
 
 ## 7. Non-src code surfaces (runtime context)
 
-This doc is `src/`-first, but these files define how the crate is exercised in practice:
+This doc is `wavyte-core/src/`-first, but these files define how the crate is exercised in practice:
 
 - `bench/src/main.rs`
   - End-to-end benchmark harness with warmup/repeat controls.
@@ -1113,19 +1177,21 @@ This doc is `src/`-first, but these files define how the crate is exercised in p
   - Supports sequential and parallel modes, thread count, chunking, optional static-frame elision.
   - Builds a representative composition using path/svg/image/text (and transitions/effects optionally).
 
-- `examples/*.rs`
+- `wavyte-core/examples/*.rs`
   - Demonstrate single-frame rendering, PNG output, MP4 output, transition/effect examples, layout examples, media-gamut example, and Remotion-style hello-world composition.
-  - Most MP4 examples route through `examples/support/mod.rs` helper wrappers.
+  - Most MP4 examples route through `wavyte-core/examples/support/mod.rs` helper wrappers.
   - Examples intentionally emit artifacts into repo `assets/` for quick visual validation.
 
-- `tests/*.rs`
-  - Integration tests cover asset preparation, JSON/validation, evaluator behavior, CPU renderer, SVG/text paths, parallel parity, CLI smoke behavior, and media pipeline path (feature-gated).
+- `wavyte-core/tests/*.rs`
+  - Integration tests cover asset preparation, JSON/validation, evaluator behavior, CPU renderer, SVG/text paths, parallel parity, and media pipeline paths (feature-gated).
+- `wavyte-cli/tests/*.rs`
+  - CLI integration tests (including frame smoke flow invoking binary `wavyte`).
   - Unit tests inside modules assert low-level invariants (math, parse, transitions, blur/composite correctness, etc).
 
 ## 8. Public API call-chain atlas (final pass)
 
 Scope of this section:
-- Primary target: callable APIs exported through `src/lib.rs` (functions + public methods on exported types).
+- Primary target: callable APIs exported through `wavyte-core/src/lib.rs` (functions + public methods on exported types).
 - Secondary addendum: selected `pub` helpers inside private modules that are public in source but not re-exported.
 
 Legend:
@@ -1484,6 +1550,11 @@ decode_video_frame_rgba8(source, t) [feature media-ffmpeg]
   => length checks
   -> Vec<u8> RGBA | [error]
 
+decode_video_frames_rgba8(source, start_t, frame_count) [feature media-ffmpeg, crate-internal]
+  -> ffmpeg -ss start_t -frames:v N -f rawvideo -pix_fmt rgba pipe:1
+  => validate batch byte length and slice into per-frame buffers
+  -> Vec<Vec<u8>> | [error]
+
 decode_audio_f32_stereo(path,sample_rate) [feature media-ffmpeg]
   -> ffmpeg decode to f32le stereo pipe
   => parse bytes to f32 samples
@@ -1519,7 +1590,13 @@ Evaluator::eval_frame(comp, frame)
   -> eval_frame_with_layout(comp, frame, default LayoutOffsets)
 
 Evaluator::eval_frame_with_layout(comp, frame, layout_offsets)
-  -> comp.validate()
+  -> eval_frame_with_layout_impl(..., validate_comp=true)
+
+Evaluator::eval_frame_with_layout_unchecked(comp, frame, layout_offsets) [crate-internal]
+  -> eval_frame_with_layout_impl(..., validate_comp=false)
+
+eval_frame_with_layout_impl(...)
+  => optional comp.validate()
   => frame bounds check
   for each track/clip visible at frame:
     -> eval_clip(...)
@@ -1563,9 +1640,12 @@ fingerprint_eval(eval)
 
 ```text
 compile_frame(comp, eval, assets)
+  -> compile_frame_with_cache(comp, eval, assets, fresh cache)
+
+compile_frame_with_cache(comp, eval, assets, cache) [crate-internal]
   => initialize final surface 0
   for each evaluated node:
-    -> parse_effect + normalize_effects
+    -> parse_effect_cached + normalize_effects
     => combine node opacity and inline opacity_mul
     => combine node transform and inline transform_post
     -> assets.id_for_key + assets.get
@@ -1574,6 +1654,7 @@ compile_frame(comp, eval, assets)
     => append OffscreenPass chain for pass fx
     => push layer metadata (surface + transitions)
   => scan layers for transition pairing:
+       transitions parsed via parse_transition_cached
        paired -> Crossfade/Wipe
        unpaired -> Over with transition attenuation
   => append final CompositePass(target=0)
@@ -1620,9 +1701,10 @@ execute_plan(backend, plan, assets)
 
 ```text
 render_frame(comp, frame, backend, assets)
+  -> comp.validate
   -> resolve_layout_offsets
-  -> Evaluator::eval_frame_with_layout
-  -> compile_frame
+  -> Evaluator::eval_frame_with_layout_unchecked
+  -> compile_frame_with_cache (fresh cache for call)
   -> execute_plan
   -> FrameRGBA
 
@@ -1633,10 +1715,12 @@ render_frames(comp, range, backend, assets)
 
 render_frames_with_stats(comp, range, backend, assets, threading)
   => validate non-empty range
+  -> comp.validate
   -> resolve_layout_offsets
+  -> allocate rolling CompileCache (sequential path)
   if sequential:
     for frame:
-      eval -> compile -> execute
+      eval_unchecked -> compile_with_cache -> execute
     -> frames + stats(rendered==total)
   if parallel:
     -> backend.worker_render_settings() required
@@ -1653,6 +1737,7 @@ render_to_mp4(comp, out, opts, backend, assets)
   => discard stats
 
 render_to_mp4_with_stats(comp, out, opts, backend, assets)
+  -> comp.validate
   => validate range and integer fps requirement
   -> is_ffmpeg_on_path check
   -> build_audio_manifest(comp, assets, range)
@@ -1662,8 +1747,8 @@ render_to_mp4_with_stats(comp, out, opts, backend, assets)
   -> build EncodeConfig
   -> FfmpegEncoder::new(cfg,bg)
   -> resolve_layout_offsets
-  -> sequential or parallel chunk render (same core as render_frames_with_stats)
-  -> for each rendered frame: FfmpegEncoder::encode_frame
+  -> sequential chunk path: render_chunk_sequential + encode each frame
+  -> parallel chunk path: render_chunk_parallel_cpu_unique + encode by frame_to_unique mapping
   -> FfmpegEncoder::finish
   -> TempFileGuard drop removes temp audio file
   -> RenderStats
@@ -1686,7 +1771,8 @@ mix_manifest(manifest)
   => allocate output interleaved f32 buffer
   for each segment:
     for each timeline sample:
-      => map to source sample by source_start_sec + rel_sec*playback_rate
+      => map to floating source sample index by source_start_sec + rel_sec*playback_rate
+      => linearly interpolate between adjacent source frames
       => apply fade_gain * volume
       => add into output channels
   => clamp output [-1,1]
@@ -1729,6 +1815,7 @@ FfmpegEncoder::new(cfg,bg)
   -> is_ffmpeg_on_path check
   -> build ffmpeg command args
   -> spawn process and take stdin
+  -> spawn stderr drain thread
   -> encoder with scratch frame buffer
 
 FfmpegEncoder::encode_frame(frame)
@@ -1738,7 +1825,8 @@ FfmpegEncoder::encode_frame(frame)
 
 FfmpegEncoder::finish()
   => close stdin
-  -> wait_with_output
+  -> child.wait()
+  -> join stderr drain thread
   => status success check
 ```
 
@@ -1811,503 +1899,508 @@ blur_rgba8_premul(...)
   => separable gaussian blur used by CpuBackend::exec_offscreen
 ```
 
-## 9. Raw symbol appendix (generated from `src/`)
+## 9. Raw symbol appendix (generated from `wavyte-core/src/` + `wavyte-cli/src/`)
 
 The following section is a direct inventory generated from:
-- `rg -n "^(pub\s+)?(type|struct|enum|trait)\s+|^impl\b|^\s*(pub\s+)?fn\s" src -g '*.rs'`
+- `rg -n "^(pub\s+)?(type|struct|enum|trait)\s+|^impl\b|^\s*(pub\s+)?fn\s" wavyte-core/src wavyte-cli/src -g '*.rs'`
 
 It is included so this document is auditable for coverage.
 
 ```text
-src/animation/anim.rs:107:pub struct Keyframes<T> {
-src/animation/anim.rs:113:impl<T> Keyframes<T>
-src/animation/anim.rs:117:    pub fn validate(&self) -> WavyteResult<()> {
-src/animation/anim.rs:131:    pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
-src/animation/anim.rs:166:pub struct Keyframe<T> {
-src/animation/anim.rs:16:pub trait Lerp: Sized {
-src/animation/anim.rs:173:pub enum InterpMode {
-src/animation/anim.rs:179:pub enum Expr<T> {
-src/animation/anim.rs:17:    fn lerp(a: &Self, b: &Self, t: f64) -> Self;
-src/animation/anim.rs:205:pub enum LoopMode {
-src/animation/anim.rs:20:impl Lerp for f64 {
-src/animation/anim.rs:210:impl<T> Expr<T>
-src/animation/anim.rs:214:    pub fn validate(&self) -> WavyteResult<()> {
-src/animation/anim.rs:21:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
-src/animation/anim.rs:247:    pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
-src/animation/anim.rs:248:        fn with_clip_local(mut ctx: SampleCtx, clip_local: FrameIndex) -> SampleCtx {
-src/animation/anim.rs:26:impl Lerp for f32 {
-src/animation/anim.rs:27:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
-src/animation/anim.rs:325:    fn ctx(frame: u64) -> SampleCtx {
-src/animation/anim.rs:32:impl Lerp for Vec2 {
-src/animation/anim.rs:335:    fn keyframes_hold_is_constant_between_keys() {
-src/animation/anim.rs:33:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
-src/animation/anim.rs:357:    fn keyframes_linear_interpolates() {
-src/animation/anim.rs:378:    fn expr_reverse_maps_frames() {
-src/animation/anim.rs:38:impl Lerp for Transform2D {
-src/animation/anim.rs:39:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
-src/animation/anim.rs:49:impl Lerp for crate::core::Rgba8Premul {
-src/animation/anim.rs:50:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
-src/animation/anim.rs:51:        fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
-src/animation/anim.rs:67:pub enum Anim<T> {
-src/animation/anim.rs:73:impl<T> Anim<T>
-src/animation/anim.rs:77:    pub fn constant(value: T) -> Self {
-src/animation/anim.rs:89:    pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
-src/animation/anim.rs:97:    pub fn validate(&self) -> WavyteResult<()> {
-src/animation/anim.rs:9:pub struct SampleCtx {
-src/animation/ease.rs:12:impl Ease {
-src/animation/ease.rs:13:    pub fn apply(self, t: f64) -> f64 {
-src/animation/ease.rs:2:pub enum Ease {
-src/animation/ease.rs:44:    fn endpoints_are_stable() {
-src/animation/ease.rs:60:    fn monotonic_spot_check() {
-src/animation/ops.rs:10:pub fn speed<T>(inner: Anim<T>, factor: f64) -> Anim<T> {
-src/animation/ops.rs:17:pub fn reverse<T>(inner: Anim<T>, duration_frames: u64) -> Anim<T> {
-src/animation/ops.rs:24:pub fn loop_<T>(inner: Anim<T>, period_frames: u64, mode: LoopMode) -> Anim<T> {
-src/animation/ops.rs:32:pub fn mix<T>(a: Anim<T>, b: Anim<T>, t: Anim<f64>) -> Anim<T> {
-src/animation/ops.rs:3:pub fn delay<T>(inner: Anim<T>, by_frames: u64) -> Anim<T> {
-src/animation/ops.rs:40:pub fn sequence(a: Anim<f64>, a_len: u64, b: Anim<f64>) -> Anim<f64> {
-src/animation/ops.rs:63:pub fn stagger(mut anims: Vec<(u64, Anim<f64>)>) -> Anim<f64> {
-src/animation/ops.rs:83:    fn ctx(frame: u64) -> SampleCtx {
-src/animation/ops.rs:93:    fn sequence_switches_at_boundary() {
-src/animation/proc.rs:100:fn sample_scalar(s: &ProcScalar, fps: Fps, frame: u64, seed: u64) -> f64 {
-src/animation/proc.rs:14:impl<T> Procedural<T> {
-src/animation/proc.rs:159:impl ProcValue for f64 {
-src/animation/proc.rs:15:    pub fn new(kind: ProceduralKind) -> Self {
-src/animation/proc.rs:160:    fn from_procedural(kind: &ProceduralKind, ctx: SampleCtx) -> WavyteResult<Self> {
-src/animation/proc.rs:170:impl ProcValue for f32 {
-src/animation/proc.rs:171:    fn from_procedural(kind: &ProceduralKind, ctx: SampleCtx) -> WavyteResult<Self> {
-src/animation/proc.rs:176:impl ProcValue for Vec2 {
-src/animation/proc.rs:177:    fn from_procedural(kind: &ProceduralKind, ctx: SampleCtx) -> WavyteResult<Self> {
-src/animation/proc.rs:190:impl ProcValue for Transform2D {
-src/animation/proc.rs:191:    fn from_procedural(_kind: &ProceduralKind, _ctx: SampleCtx) -> WavyteResult<Self> {
-src/animation/proc.rs:198:impl ProcValue for crate::core::Rgba8Premul {
-src/animation/proc.rs:199:    fn from_procedural(_kind: &ProceduralKind, _ctx: SampleCtx) -> WavyteResult<Self> {
-src/animation/proc.rs:211:    fn ctx(frame: u64, seed: u64) -> SampleCtx {
-src/animation/proc.rs:221:    fn rng_is_deterministic() {
-src/animation/proc.rs:230:    fn noise_is_bounded_and_deterministic() {
-src/animation/proc.rs:23:pub trait ProcValue: Sized {
-src/animation/proc.rs:247:    fn envelope_basic_boundaries() {
-src/animation/proc.rs:24:    fn from_procedural(kind: &ProceduralKind, ctx: SampleCtx) -> WavyteResult<Self>;
-src/animation/proc.rs:27:impl<T> Procedural<T>
-src/animation/proc.rs:31:    pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
-src/animation/proc.rs:38:pub enum ProceduralKind {
-src/animation/proc.rs:44:pub enum ProcScalar {
-src/animation/proc.rs:70:pub struct Rng64 {
-src/animation/proc.rs:74:impl Rng64 {
-src/animation/proc.rs:75:    pub fn new(seed: u64) -> Self {
-src/animation/proc.rs:79:    pub fn next_u64(&mut self) -> u64 {
-src/animation/proc.rs:88:    pub fn next_f64_01(&mut self) -> f64 {
-src/animation/proc.rs:8:pub struct Procedural<T> {
-src/animation/proc.rs:95:fn noise01(seed: u64, x: u64) -> f64 {
-src/assets/decode.rs:10:pub fn decode_image(bytes: &[u8]) -> WavyteResult<PreparedImage> {
-src/assets/decode.rs:25:pub fn parse_svg(bytes: &[u8]) -> WavyteResult<PreparedSvg> {
-src/assets/decode.rs:33:fn premultiply_rgba8_in_place(rgba: &mut [u8]) {
-src/assets/decode.rs:55:    fn decode_image_png_dimensions_and_premul() {
-src/assets/decode.rs:79:    fn decode_svg_parse_ok_and_err() {
-src/assets/media.rs:11:pub struct VideoSourceInfo {
-src/assets/media.rs:134:pub fn probe_video(_source_path: &Path) -> WavyteResult<VideoSourceInfo> {
-src/assets/media.rs:141:pub fn decode_video_frame_rgba8(
-src/assets/media.rs:182:pub fn decode_video_frame_rgba8(
-src/assets/media.rs:192:pub fn decode_audio_f32_stereo(path: &Path, sample_rate: u32) -> WavyteResult<AudioPcm> {
-src/assets/media.rs:22:pub struct AudioPcm {
-src/assets/media.rs:252:pub fn decode_audio_f32_stereo(_path: &Path, _sample_rate: u32) -> WavyteResult<AudioPcm> {
-src/assets/media.rs:259:fn parse_ff_ratio(s: &str) -> Option<(u32, u32)> {
-src/assets/media.rs:274:    fn source_time_mapping_applies_trim_and_rate() {
-src/assets/media.rs:28:impl VideoSourceInfo {
-src/assets/media.rs:29:    pub fn source_fps(&self) -> f64 {
-src/assets/media.rs:38:pub fn video_source_time_sec(asset: &VideoAsset, clip_local_frames: u64, fps: crate::Fps) -> f64 {
-src/assets/media.rs:47:pub fn audio_source_time_sec(asset: &AudioAsset, clip_local_frames: u64, fps: crate::Fps) -> f64 {
-src/assets/media.rs:57:pub fn probe_video(source_path: &Path) -> WavyteResult<VideoSourceInfo> {
-src/assets/store.rs:100:impl AssetKey {
-src/assets/store.rs:101:    pub fn new(norm_path: String, mut params: Vec<(String, String)>) -> Self {
-src/assets/store.rs:108:pub struct PreparedAssetStore {
-src/assets/store.rs:114:impl PreparedAssetStore {
-src/assets/store.rs:115:    pub fn prepare(comp: &model::Composition, root: impl Into<PathBuf>) -> WavyteResult<Self> {
-src/assets/store.rs:17:pub struct PreparedImage {
-src/assets/store.rs:206:    pub fn root(&self) -> &Path {
-src/assets/store.rs:210:    pub fn id_for_key(&self, key: &str) -> WavyteResult<AssetId> {
-src/assets/store.rs:217:    pub fn get(&self, id: AssetId) -> WavyteResult<&PreparedAsset> {
-src/assets/store.rs:223:    fn key_for(&self, asset: &model::Asset) -> WavyteResult<(u8, AssetKey)> {
-src/assets/store.rs:24:pub struct PreparedSvg {
-src/assets/store.rs:271:    fn hash_id_for_key(kind_tag: u8, key: &AssetKey) -> AssetId {
-src/assets/store.rs:285:    fn read_bytes(&self, norm_path: &str) -> WavyteResult<Vec<u8>> {
-src/assets/store.rs:293:fn parse_svg_with_options(root: &Path, norm_path: &str, bytes: &[u8]) -> WavyteResult<PreparedSvg> {
-src/assets/store.rs:29:pub struct TextBrushRgba8 {
-src/assets/store.rs:312:fn build_svg_fontdb(
-src/assets/store.rs:330:fn load_fonts_from_dir(db: &mut usvg::fontdb::Database, dir: &Path) {
-src/assets/store.rs:351:fn make_svg_font_resolver() -> usvg::FontResolver<'static> {
-src/assets/store.rs:37:pub struct PreparedText {
-src/assets/store.rs:406:pub fn normalize_rel_path(source: &str) -> WavyteResult<String> {
-src/assets/store.rs:435:fn parse_svg_path(d: &str) -> WavyteResult<BezPath> {
-src/assets/store.rs:43:impl std::fmt::Debug for PreparedText {
-src/assets/store.rs:446:struct Fnv1a64(u64);
-src/assets/store.rs:448:impl Fnv1a64 {
-src/assets/store.rs:449:    fn new() -> Self {
-src/assets/store.rs:44:    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-src/assets/store.rs:453:    fn write_u8(&mut self, b: u8) {
-src/assets/store.rs:457:    fn write_bytes(&mut self, bytes: &[u8]) {
-src/assets/store.rs:466:    fn finish(self) -> u64 {
-src/assets/store.rs:471:pub struct TextLayoutEngine {
-src/assets/store.rs:477:impl Default for TextLayoutEngine {
-src/assets/store.rs:478:    fn default() -> Self {
-src/assets/store.rs:483:impl TextLayoutEngine {
-src/assets/store.rs:484:    pub fn new() -> Self {
-src/assets/store.rs:492:    pub fn last_family_name(&self) -> Option<String> {
-src/assets/store.rs:496:    pub fn layout_plain(
-src/assets/store.rs:54:pub struct PreparedPath {
-src/assets/store.rs:559:    fn normalize_path_slash_normalization() {
-src/assets/store.rs:567:    fn asset_id_stability_same_input() {
-src/assets/store.rs:583:    fn prepare_path_assets_without_external_io() {
-src/assets/store.rs:59:pub struct PreparedAudio {
-src/assets/store.rs:614:    fn text_layout_smoke_with_local_font_if_present() {
-src/assets/store.rs:640:    fn prepare_single_image_asset() {
-src/assets/store.rs:66:pub struct PreparedVideo {
-src/assets/store.rs:72:pub enum PreparedAsset {
-src/assets/store.rs:82:pub struct AssetId(pub(crate) u64);
-src/assets/store.rs:84:impl AssetId {
-src/assets/store.rs:85:    pub fn from_u64(raw: u64) -> Self {
-src/assets/store.rs:89:    pub fn as_u64(self) -> u64 {
-src/assets/store.rs:95:pub struct AssetKey {
-src/assets/svg_raster.rs:18:pub fn svg_raster_params(
-src/assets/svg_raster.rs:22:    fn to_px(v: f32) -> WavyteResult<u32> {
-src/assets/svg_raster.rs:4:pub struct SvgRasterKey {
-src/assets/svg_raster.rs:57:pub fn rasterize_svg_to_premul_rgba8(
-src/audio/mix.rs:12:pub struct AudioSegment {
-src/audio/mix.rs:148:pub fn write_mix_to_f32le_file(samples_interleaved: &[f32], out_path: &Path) -> WavyteResult<()> {
-src/audio/mix.rs:170:fn fade_gain(seg: &AudioSegment, rel_sec: f64, seg_len_samples: u64, sample_rate: u32) -> f32 {
-src/audio/mix.rs:185:fn push_audio_segment(
-src/audio/mix.rs:223:fn push_video_audio_segment(
-src/audio/mix.rs:265:fn push_segment_common(
-src/audio/mix.rs:27:pub struct AudioManifest {
-src/audio/mix.rs:308:pub fn frame_to_sample(frame_delta: u64, fps: Fps, sample_rate: u32) -> u64 {
-src/audio/mix.rs:314:fn intersect_ranges(a: FrameRange, b: FrameRange) -> Option<FrameRange> {
-src/audio/mix.rs:328:    fn frame_to_sample_uses_rational_fps() {
-src/audio/mix.rs:335:    fn mix_applies_overlap_and_fades() {
-src/audio/mix.rs:34:pub fn build_audio_manifest(
-src/audio/mix.rs:93:pub fn mix_manifest(manifest: &AudioManifest) -> Vec<f32> {
-src/bin/wavyte.rs:108:fn cmd_frame(args: FrameArgs) -> anyhow::Result<()> {
-src/bin/wavyte.rs:13:struct Cli {
-src/bin/wavyte.rs:151:fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
-src/bin/wavyte.rs:180:fn dump_font_diagnostics(
-src/bin/wavyte.rs:19:enum Command {
-src/bin/wavyte.rs:240:fn sha256_hex(bytes: &[u8]) -> String {
-src/bin/wavyte.rs:249:fn count_svg_text_nodes(group: &usvg::Group) -> usize {
-src/bin/wavyte.rs:27:struct FrameArgs {
-src/bin/wavyte.rs:54:struct RenderArgs {
-src/bin/wavyte.rs:77:enum BackendChoice {
-src/bin/wavyte.rs:81:fn main() -> anyhow::Result<()> {
-src/bin/wavyte.rs:89:fn read_comp_json(path: &Path) -> anyhow::Result<wavyte::Composition> {
-src/bin/wavyte.rs:97:fn make_backend(
-src/composition/dsl.rs:111:pub struct TrackBuilder {
-src/composition/dsl.rs:123:impl TrackBuilder {
-src/composition/dsl.rs:124:    pub fn new(name: impl Into<String>) -> Self {
-src/composition/dsl.rs:138:    pub fn z_base(mut self, z: i32) -> Self {
-src/composition/dsl.rs:13:pub struct CompositionBuilder {
-src/composition/dsl.rs:143:    pub fn clip(mut self, clip: Clip) -> Self {
-src/composition/dsl.rs:148:    pub fn layout_mode(mut self, mode: crate::LayoutMode) -> Self {
-src/composition/dsl.rs:153:    pub fn layout_gap_px(mut self, gap: f64) -> Self {
-src/composition/dsl.rs:158:    pub fn layout_padding(mut self, padding: crate::Edges) -> Self {
-src/composition/dsl.rs:163:    pub fn layout_align(mut self, x: crate::LayoutAlignX, y: crate::LayoutAlignY) -> Self {
-src/composition/dsl.rs:169:    pub fn layout_grid_columns(mut self, columns: u32) -> Self {
-src/composition/dsl.rs:174:    pub fn build(self) -> WavyteResult<Track> {
-src/composition/dsl.rs:192:pub struct ClipBuilder {
-src/composition/dsl.rs:205:impl ClipBuilder {
-src/composition/dsl.rs:206:    pub fn new(id: impl Into<String>, asset_key: impl Into<String>, range: FrameRange) -> Self {
-src/composition/dsl.rs:221:    pub fn z_offset(mut self, z: i32) -> Self {
-src/composition/dsl.rs:226:    pub fn opacity(mut self, a: Anim<f64>) -> Self {
-src/composition/dsl.rs:22:impl CompositionBuilder {
-src/composition/dsl.rs:231:    pub fn transform(mut self, t: Anim<Transform2D>) -> Self {
-src/composition/dsl.rs:236:    pub fn effect(mut self, fx: EffectInstance) -> Self {
-src/composition/dsl.rs:23:    pub fn new(fps: crate::core::Fps, canvas: Canvas, duration: FrameIndex) -> Self {
-src/composition/dsl.rs:241:    pub fn transition_in(mut self, tr: TransitionSpec) -> Self {
-src/composition/dsl.rs:246:    pub fn transition_out(mut self, tr: TransitionSpec) -> Self {
-src/composition/dsl.rs:251:    pub fn build(self) -> WavyteResult<Clip> {
-src/composition/dsl.rs:288:    fn builders_create_expected_structure() {
-src/composition/dsl.rs:338:    fn duplicate_asset_key_is_rejected() {
-src/composition/dsl.rs:34:    pub fn seed(mut self, seed: u64) -> Self {
-src/composition/dsl.rs:39:    pub fn asset(mut self, key: impl Into<String>, asset: Asset) -> WavyteResult<Self> {
-src/composition/dsl.rs:50:    pub fn track(mut self, track: Track) -> Self {
-src/composition/dsl.rs:55:    pub fn video_asset(
-src/composition/dsl.rs:63:    pub fn audio_asset(
-src/composition/dsl.rs:71:    pub fn build(self) -> WavyteResult<Composition> {
-src/composition/dsl.rs:85:pub fn video_asset(source: impl Into<String>) -> VideoAsset {
-src/composition/dsl.rs:98:pub fn audio_asset(source: impl Into<String>) -> AudioAsset {
-src/composition/eval.rs:140:fn resolve_effect(e: &EffectInstance) -> WavyteResult<ResolvedEffect> {
-src/composition/eval.rs:150:fn resolve_transition_in(clip: &Clip, frame: FrameIndex) -> Option<ResolvedTransition> {
-src/composition/eval.rs:15:pub struct EvaluatedClipNode {
-src/composition/eval.rs:161:fn resolve_transition_out(clip: &Clip, frame: FrameIndex) -> Option<ResolvedTransition> {
-src/composition/eval.rs:167:enum TransitionEdge {
-src/composition/eval.rs:172:fn resolve_transition_window(
-src/composition/eval.rs:222:fn stable_hash64(seed: u64, s: &str) -> u64 {
-src/composition/eval.rs:243:    fn basic_comp(
-src/composition/eval.rs:299:    fn visibility_respects_frame_range() {
-src/composition/eval.rs:29:pub struct ResolvedEffect {
-src/composition/eval.rs:332:    fn opacity_is_clamped() {
-src/composition/eval.rs:340:    fn transition_progress_boundaries() {
-src/composition/eval.rs:35:pub struct ResolvedTransition {
-src/composition/eval.rs:41:pub struct Evaluator;
-src/composition/eval.rs:43:impl Evaluator {
-src/composition/eval.rs:45:    pub fn eval_frame(comp: &Composition, frame: FrameIndex) -> WavyteResult<EvaluatedGraph> {
-src/composition/eval.rs:50:    pub fn eval_frame_with_layout(
-src/composition/eval.rs:92:fn eval_clip(
-src/composition/eval.rs:9:pub struct EvaluatedGraph {
-src/composition/layout.rs:107:fn intrinsic_size_for_asset_key(
-src/composition/layout.rs:139:fn align_offset<W: Into<f64>, C: Into<f64>, A>(container: W, content: C, align: A) -> f64
-src/composition/layout.rs:13:impl LayoutOffsets {
-src/composition/layout.rs:14:    pub fn offset_for(&self, track_idx: usize, clip_idx: usize) -> Vec2 {
-src/composition/layout.rs:153:enum AlignKind {
-src/composition/layout.rs:159:impl From<LayoutAlignX> for AlignKind {
-src/composition/layout.rs:160:    fn from(value: LayoutAlignX) -> Self {
-src/composition/layout.rs:169:impl From<LayoutAlignY> for AlignKind {
-src/composition/layout.rs:170:    fn from(value: LayoutAlignY) -> Self {
-src/composition/layout.rs:184:    fn comp_for_layout(mode: LayoutMode) -> Composition {
-src/composition/layout.rs:23:pub fn resolve_layout_offsets(
-src/composition/layout.rs:251:    fn hstack_offsets_are_deterministic() {
-src/composition/layout.rs:260:    fn center_mode_centers_each_clip() {
-src/composition/layout.rs:34:fn resolve_track_offsets(
-src/composition/layout.rs:9:pub struct LayoutOffsets {
-src/composition/model.rs:105:pub struct ClipProps {
-src/composition/model.rs:113:pub enum BlendMode {
-src/composition/model.rs:122:pub enum Asset {
-src/composition/model.rs:132:pub struct TextAsset {
-src/composition/model.rs:142:fn default_text_color_rgba8() -> [u8; 4] {
-src/composition/model.rs:147:pub struct SvgAsset {
-src/composition/model.rs:152:pub struct PathAsset {
-src/composition/model.rs:157:pub struct ImageAsset {
-src/composition/model.rs:162:pub struct VideoAsset {
-src/composition/model.rs:181:pub struct AudioAsset {
-src/composition/model.rs:199:fn default_playback_rate() -> f64 {
-src/composition/model.rs:19:pub struct Composition {
-src/composition/model.rs:203:fn default_volume() -> f64 {
-src/composition/model.rs:208:pub struct EffectInstance {
-src/composition/model.rs:215:pub struct TransitionSpec {
-src/composition/model.rs:223:impl Composition {
-src/composition/model.rs:224:    pub fn validate(&self) -> WavyteResult<()> {
-src/composition/model.rs:30:pub struct Track {
-src/composition/model.rs:354:fn validate_rel_source(source: &str, field: &str) -> WavyteResult<()> {
-src/composition/model.rs:376:fn validate_media_controls(
-src/composition/model.rs:420:impl TransitionSpec {
-src/composition/model.rs:421:    pub fn validate(&self) -> WavyteResult<()> {
-src/composition/model.rs:444:    fn basic_comp() -> Composition {
-src/composition/model.rs:49:pub enum LayoutMode {
-src/composition/model.rs:504:    fn json_roundtrip() {
-src/composition/model.rs:513:    fn validate_rejects_missing_asset() {
-src/composition/model.rs:520:    fn validate_rejects_out_of_bounds_range() {
-src/composition/model.rs:530:    fn validate_rejects_bad_fps() {
-src/composition/model.rs:537:    fn media_assets_serde_defaults_and_validation() {
-src/composition/model.rs:562:    fn media_validation_rejects_non_positive_playback_rate() {
-src/composition/model.rs:59:pub struct Edges {
-src/composition/model.rs:71:pub enum LayoutAlignX {
-src/composition/model.rs:79:pub enum LayoutAlignY {
-src/composition/model.rs:86:fn default_layout_grid_columns() -> u32 {
-src/composition/model.rs:92:pub struct Clip {
-src/foundation/core.rs:102:pub struct Rgba8Premul {
-src/foundation/core.rs:109:impl Rgba8Premul {
-src/foundation/core.rs:110:    pub fn transparent() -> Self {
-src/foundation/core.rs:119:    pub fn from_straight_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
-src/foundation/core.rs:11:pub struct FrameRange {
-src/foundation/core.rs:120:        fn premul(c: u8, a: u8) -> u8 {
-src/foundation/core.rs:136:pub struct Transform2D {
-src/foundation/core.rs:143:impl Default for Transform2D {
-src/foundation/core.rs:144:    fn default() -> Self {
-src/foundation/core.rs:154:impl Transform2D {
-src/foundation/core.rs:155:    pub fn to_affine(self) -> kurbo::Affine {
-src/foundation/core.rs:16:impl FrameRange {
-src/foundation/core.rs:173:    fn frame_range_contains_boundaries() {
-src/foundation/core.rs:17:    pub fn new(start: FrameIndex, end: FrameIndex) -> WavyteResult<Self> {
-src/foundation/core.rs:182:    fn fps_frames_secs_roundtrip_floor() {
-src/foundation/core.rs:189:    fn transform_to_affine_identity_and_translation() {
-src/foundation/core.rs:24:    pub fn len_frames(self) -> u64 {
-src/foundation/core.rs:28:    pub fn is_empty(self) -> bool {
-src/foundation/core.rs:32:    pub fn contains(self, f: FrameIndex) -> bool {
-src/foundation/core.rs:36:    pub fn clamp(self, f: FrameIndex) -> FrameIndex {
-src/foundation/core.rs:44:    pub fn shift(self, delta: i64) -> Self {
-src/foundation/core.rs:45:        fn shift_idx(v: u64, delta: i64) -> u64 {
-src/foundation/core.rs:61:pub struct Fps {
-src/foundation/core.rs:66:impl Fps {
-src/foundation/core.rs:67:    pub fn new(num: u32, den: u32) -> WavyteResult<Self> {
-src/foundation/core.rs:77:    pub fn as_f64(self) -> f64 {
-src/foundation/core.rs:81:    pub fn frame_duration_secs(self) -> f64 {
-src/foundation/core.rs:85:    pub fn frames_to_secs(self, frames: u64) -> f64 {
-src/foundation/core.rs:89:    pub fn secs_to_frames_floor(self, secs: f64) -> u64 {
-src/foundation/core.rs:8:pub struct FrameIndex(pub u64);
-src/foundation/core.rs:95:pub struct Canvas {
-src/foundation/error.rs:1:pub type WavyteResult<T> = Result<T, WavyteError>;
-src/foundation/error.rs:21:impl WavyteError {
-src/foundation/error.rs:22:    pub fn validation(msg: impl Into<String>) -> Self {
-src/foundation/error.rs:26:    pub fn animation(msg: impl Into<String>) -> Self {
-src/foundation/error.rs:30:    pub fn evaluation(msg: impl Into<String>) -> Self {
-src/foundation/error.rs:34:    pub fn serde(msg: impl Into<String>) -> Self {
-src/foundation/error.rs:44:    fn display_prefixes_are_stable() {
-src/foundation/error.rs:4:pub enum WavyteError {
-src/foundation/error.rs:68:    fn other_preserves_source() {
-src/render/backend.rs:13:pub struct FrameRGBA {
-src/render/backend.rs:26:pub trait RenderBackend: PassBackend {
-src/render/backend.rs:27:    fn render_plan(
-src/render/backend.rs:35:    fn worker_render_settings(&self) -> Option<RenderSettings> {
-src/render/backend.rs:44:pub enum BackendKind {
-src/render/backend.rs:50:pub struct RenderSettings {
-src/render/backend.rs:58:pub fn create_backend(
-src/render/blur.rs:120:fn q16_to_u8(acc: u64) -> u8 {
-src/render/blur.rs:130:    fn blur_radius_0_is_identity() {
-src/render/blur.rs:137:    fn blur_constant_image_is_identity() {
-src/render/blur.rs:146:    fn blur_spreads_energy_from_single_pixel() {
-src/render/blur.rs:32:fn gaussian_kernel_q16(radius: u32, sigma: f32) -> WavyteResult<Vec<u32>> {
-src/render/blur.rs:3:pub fn blur_rgba8_premul(
-src/render/blur.rs:75:fn horizontal_pass(src: &[u8], dst: &mut [u8], width: u32, height: u32, k: &[u32]) {
-src/render/blur.rs:97:fn vertical_pass(src: &[u8], dst: &mut [u8], width: u32, height: u32, k: &[u32]) {
-src/render/compile.rs:100:pub enum DrawOp {
-src/render/compile.rs:140:pub fn compile_frame(
-src/render/compile.rs:21:pub struct RenderPlan {
-src/render/compile.rs:30:pub enum Pass {
-src/render/compile.rs:378:    fn store_for(comp: &Composition) -> PreparedAssetStore {
-src/render/compile.rs:383:    fn compile_path_emits_fillpath_without_asset_cache() {
-src/render/compile.rs:38:pub struct ScenePass {
-src/render/compile.rs:448:    fn compile_applies_inline_effects_to_opacity_and_transform() {
-src/render/compile.rs:46:pub struct SurfaceId(pub u32);
-src/render/compile.rs:50:pub enum PixelFormat {
-src/render/compile.rs:521:    fn compile_emits_offscreen_blur_pass_and_composites_blurred_surface() {
-src/render/compile.rs:56:pub struct SurfaceDesc {
-src/render/compile.rs:612:    fn compile_pairs_crossfade_into_single_composite_op() {
-src/render/compile.rs:64:pub struct OffscreenPass {
-src/render/compile.rs:698:    fn compile_pairs_wipe_into_single_composite_op() {
-src/render/compile.rs:72:pub struct CompositePass {
-src/render/compile.rs:792:    fn compile_does_not_pair_transitions_when_progress_is_not_aligned() {
-src/render/compile.rs:79:pub enum CompositeOp {
-src/render/composite.rs:142:pub struct WipeParams {
-src/render/composite.rs:150:fn mul_div255(x: u16, y: u16) -> u8 {
-src/render/composite.rs:154:fn add_sat_u8(a: u8, b: u8) -> u8 {
-src/render/composite.rs:158:fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
-src/render/composite.rs:174:    fn over_opacity_0_is_noop() {
-src/render/composite.rs:181:    fn over_src_alpha_0_is_noop() {
-src/render/composite.rs:188:    fn over_src_opaque_replaces_dst() {
-src/render/composite.rs:195:    fn over_dst_transparent_returns_scaled_src() {
-src/render/composite.rs:202:    fn crossfade_t_0_is_a_and_t_1_is_b() {
-src/render/composite.rs:210:    fn wipe_ltr_endpoints_match_a_and_b() {
-src/render/composite.rs:252:    fn wipe_ltr_midpoint_splits_image() {
-src/render/composite.rs:279:    fn wipe_soft_edge_blends_near_boundary() {
-src/render/composite.rs:309:    fn wipe_negative_soft_edge_is_treated_as_zero() {
-src/render/composite.rs:31:pub fn crossfade(a: PremulRgba8, b: PremulRgba8, t: f32) -> PremulRgba8 {
-src/render/composite.rs:45:pub fn over_in_place(dst: &mut [u8], src: &[u8], opacity: f32) -> WavyteResult<()> {
-src/render/composite.rs:4:pub type PremulRgba8 = [u8; 4];
-src/render/composite.rs:58:pub fn crossfade_over_in_place(dst: &mut [u8], a: &[u8], b: &[u8], t: f32) -> WavyteResult<()> {
-src/render/composite.rs:6:pub fn over(dst: PremulRgba8, src: PremulRgba8, opacity: f32) -> PremulRgba8 {
-src/render/composite.rs:76:pub fn wipe_over_in_place(
-src/render/cpu.rs:125:    fn exec_scene(
-src/render/cpu.rs:13:pub struct CpuBackend {
-src/render/cpu.rs:151:    fn exec_offscreen(
-src/render/cpu.rs:196:    fn exec_composite(
-src/render/cpu.rs:22:struct CpuSurface {
-src/render/cpu.rs:281:    fn readback_rgba8(
-src/render/cpu.rs:28:struct VideoFrameDecoder {
-src/render/cpu.rs:303:impl RenderBackend for CpuBackend {
-src/render/cpu.rs:304:    fn worker_render_settings(&self) -> Option<RenderSettings> {
-src/render/cpu.rs:309:fn premul_rgba8(r: u8, g: u8, b: u8, a: u8) -> [u8; 4] {
-src/render/cpu.rs:315:fn clear_pixmap(pixmap: &mut vello_cpu::Pixmap, rgba: [u8; 4]) {
-src/render/cpu.rs:322:fn draw_op(
-src/render/cpu.rs:35:impl VideoFrameDecoder {
-src/render/cpu.rs:36:    fn new(info: std::sync::Arc<media::VideoSourceInfo>) -> Self {
-src/render/cpu.rs:45:    fn decode_at(&mut self, source_time_s: f64) -> WavyteResult<vello_cpu::Image> {
-src/render/cpu.rs:471:fn affine_to_cpu(a: crate::core::Affine) -> vello_cpu::kurbo::Affine {
-src/render/cpu.rs:475:fn point_to_cpu(p: crate::core::Point) -> vello_cpu::kurbo::Point {
-src/render/cpu.rs:479:fn bezpath_to_cpu(path: &crate::core::BezPath) -> vello_cpu::kurbo::BezPath {
-src/render/cpu.rs:497:fn image_premul_bytes_to_pixmap(
-src/render/cpu.rs:535:fn image_paint_size(image: &vello_cpu::Image) -> WavyteResult<(f64, f64)> {
-src/render/cpu.rs:544:impl CpuBackend {
-src/render/cpu.rs:545:    fn image_paint_for(
-src/render/cpu.rs:570:    fn font_for_text_asset(
-src/render/cpu.rs:590:    fn svg_paint_for(
-src/render/cpu.rs:623:    fn video_paint_for(
-src/render/cpu.rs:69:    fn touch(&mut self, key: u64) {
-src/render/cpu.rs:77:impl CpuBackend {
-src/render/cpu.rs:78:    pub fn new(settings: RenderSettings) -> Self {
-src/render/cpu.rs:90:impl PassBackend for CpuBackend {
-src/render/cpu.rs:91:    fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()> {
-src/render/encode_ffmpeg.rs:111:pub struct FfmpegEncoder {
-src/render/encode_ffmpeg.rs:119:impl FfmpegEncoder {
-src/render/encode_ffmpeg.rs:121:    pub fn new(cfg: EncodeConfig, bg_rgba: [u8; 4]) -> WavyteResult<Self> {
-src/render/encode_ffmpeg.rs:13:pub struct EncodeConfig {
-src/render/encode_ffmpeg.rs:224:    pub fn encode_frame(&mut self, frame: &FrameRGBA) -> WavyteResult<()> {
-src/render/encode_ffmpeg.rs:23:pub struct AudioInputConfig {
-src/render/encode_ffmpeg.rs:260:    pub fn finish(mut self) -> WavyteResult<()> {
-src/render/encode_ffmpeg.rs:280:fn flatten_to_opaque_rgba8(
-src/render/encode_ffmpeg.rs:29:impl EncodeConfig {
-src/render/encode_ffmpeg.rs:31:    pub fn validate(&self) -> WavyteResult<()> {
-src/render/encode_ffmpeg.rs:329:fn mul_div255(x: u16, y: u16) -> u16 {
-src/render/encode_ffmpeg.rs:338:    fn config_validation_catches_bad_values() {
-src/render/encode_ffmpeg.rs:380:    fn flatten_premul_over_black_produces_expected_rgb() {
-src/render/encode_ffmpeg.rs:389:    fn flatten_straight_over_black_produces_expected_rgb() {
-src/render/encode_ffmpeg.rs:62:    pub fn with_out_path(mut self, out_path: impl Into<PathBuf>) -> Self {
-src/render/encode_ffmpeg.rs:69:pub fn default_mp4_config(
-src/render/encode_ffmpeg.rs:86:pub fn is_ffmpeg_on_path() -> bool {
-src/render/encode_ffmpeg.rs:97:pub fn ensure_parent_dir(path: &Path) -> WavyteResult<()> {
-src/render/fingerprint.rs:104:fn write_u8_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, v: u8) {
-src/render/fingerprint.rs:109:fn write_u64_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, v: u64) {
-src/render/fingerprint.rs:114:fn write_i64_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, v: i64) {
-src/render/fingerprint.rs:118:fn write_str_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, s: &str) {
-src/render/fingerprint.rs:125:struct Fnv1a64(u64);
-src/render/fingerprint.rs:127:impl Fnv1a64 {
-src/render/fingerprint.rs:128:    fn new(seed: u64) -> Self {
-src/render/fingerprint.rs:132:    fn write_u8(&mut self, v: u8) {
-src/render/fingerprint.rs:136:    fn write_u64(&mut self, v: u64) {
-src/render/fingerprint.rs:140:    fn write_bytes(&mut self, bytes: &[u8]) {
-src/render/fingerprint.rs:149:    fn finish(self) -> u64 {
-src/render/fingerprint.rs:159:    fn comp_with_opacity(opacity: f64) -> Composition {
-src/render/fingerprint.rs:202:    fn fingerprint_is_deterministic_for_same_eval() {
-src/render/fingerprint.rs:211:    fn fingerprint_changes_when_scene_changes() {
-src/render/fingerprint.rs:4:pub struct FrameFingerprint {
-src/render/fingerprint.rs:69:fn write_json_value_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, v: &serde_json::Value) {
-src/render/fingerprint.rs:9:pub fn fingerprint_eval(eval: &EvaluatedGraph) -> FrameFingerprint {
-src/render/fx.rs:116:fn get_u32(obj: &serde_json::Value, key: &str) -> WavyteResult<u32> {
-src/render/fx.rs:131:fn get_f32(obj: &serde_json::Value, key: &str) -> WavyteResult<f32> {
-src/render/fx.rs:151:fn parse_affine(params: &serde_json::Value) -> WavyteResult<Affine> {
-src/render/fx.rs:15:pub struct InlineFx {
-src/render/fx.rs:20:impl Default for InlineFx {
-src/render/fx.rs:21:    fn default() -> Self {
-src/render/fx.rs:238:    fn inst(kind: &str, params: serde_json::Value) -> EffectInstance {
-src/render/fx.rs:246:    fn parse_opacity_mul() {
-src/render/fx.rs:252:    fn normalize_folds_opacity_and_drops_noop_blur() {
-src/render/fx.rs:30:pub enum PassFx {
-src/render/fx.rs:35:pub struct FxPipeline {
-src/render/fx.rs:40:pub fn parse_effect(inst: &EffectInstance) -> WavyteResult<Effect> {
-src/render/fx.rs:88:pub fn normalize_effects(effects: &[Effect]) -> FxPipeline {
-src/render/fx.rs:8:pub enum Effect {
-src/render/passes.rs:105:        fn readback_rgba8(
-src/render/passes.rs:11:    fn exec_scene(&mut self, pass: &ScenePass, assets: &PreparedAssetStore) -> WavyteResult<()>;
-src/render/passes.rs:122:    fn execute_plan_calls_in_expected_order() {
-src/render/passes.rs:13:    fn exec_offscreen(
-src/render/passes.rs:196:    fn execute_plan_returns_final_frame() {
-src/render/passes.rs:19:    fn exec_composite(
-src/render/passes.rs:25:    fn readback_rgba8(
-src/render/passes.rs:33:pub fn execute_plan<B: PassBackend + ?Sized>(
-src/render/passes.rs:73:        fn ensure_surface(&mut self, _id: SurfaceId, _desc: &SurfaceDesc) -> WavyteResult<()> {
-src/render/passes.rs:78:        fn exec_scene(
-src/render/passes.rs:87:        fn exec_offscreen(
-src/render/passes.rs:8:pub trait PassBackend {
-src/render/passes.rs:96:        fn exec_composite(
-src/render/passes.rs:9:    fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()>;
-src/render/pipeline.rs:141:pub struct RenderToMp4Opts {
-src/render/pipeline.rs:152:impl Default for RenderToMp4Opts {
-src/render/pipeline.rs:153:    fn default() -> Self {
-src/render/pipeline.rs:174:pub fn render_to_mp4(
-src/render/pipeline.rs:185:pub fn render_to_mp4_with_stats(
-src/render/pipeline.rs:27:pub fn render_frame(
-src/render/pipeline.rs:303:fn render_chunk_sequential(
-src/render/pipeline.rs:327:fn render_chunk_parallel_cpu(
-src/render/pipeline.rs:427:fn build_thread_pool(threads: Option<usize>) -> WavyteResult<rayon::ThreadPool> {
-src/render/pipeline.rs:42:pub fn render_frames(
-src/render/pipeline.rs:445:fn normalized_chunk_size(chunk_size: usize) -> u64 {
-src/render/pipeline.rs:453:struct TempFileGuard(Option<std::path::PathBuf>);
-src/render/pipeline.rs:455:impl Drop for TempFileGuard {
-src/render/pipeline.rs:456:    fn drop(&mut self) {
-src/render/pipeline.rs:53:pub struct RenderThreading {
-src/render/pipeline.rs:60:impl Default for RenderThreading {
-src/render/pipeline.rs:61:    fn default() -> Self {
-src/render/pipeline.rs:72:pub struct RenderStats {
-src/render/pipeline.rs:78:pub fn render_frames_with_stats(
-src/render/transitions.rs:108:    fn wipe_soft_edge_is_clamped() {
-src/render/transitions.rs:15:pub enum TransitionKind {
-src/render/transitions.rs:20:pub fn parse_transition_kind_params(
-src/render/transitions.rs:7:pub enum WipeDir {
-src/render/transitions.rs:81:pub fn parse_transition(spec: &TransitionSpec) -> WavyteResult<TransitionKind> {
-src/render/transitions.rs:91:    fn wipe_dir_parses_aliases() {
+wavyte-cli/src/main.rs:13:struct Cli {
+wavyte-cli/src/main.rs:19:enum Command {
+wavyte-cli/src/main.rs:27:struct FrameArgs {
+wavyte-cli/src/main.rs:54:struct RenderArgs {
+wavyte-cli/src/main.rs:77:enum BackendChoice {
+wavyte-cli/src/main.rs:81:fn main() -> anyhow::Result<()> {
+wavyte-cli/src/main.rs:89:fn read_comp_json(path: &Path) -> anyhow::Result<wavyte::Composition> {
+wavyte-cli/src/main.rs:97:fn make_backend(
+wavyte-cli/src/main.rs:108:fn cmd_frame(args: FrameArgs) -> anyhow::Result<()> {
+wavyte-cli/src/main.rs:151:fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
+wavyte-cli/src/main.rs:180:fn dump_font_diagnostics(
+wavyte-cli/src/main.rs:240:fn sha256_hex(bytes: &[u8]) -> String {
+wavyte-cli/src/main.rs:249:fn count_svg_text_nodes(group: &usvg::Group) -> usize {
+wavyte-core/src/audio/mix.rs:12:pub struct AudioSegment {
+wavyte-core/src/audio/mix.rs:27:pub struct AudioManifest {
+wavyte-core/src/audio/mix.rs:34:pub fn build_audio_manifest(
+wavyte-core/src/audio/mix.rs:93:pub fn mix_manifest(manifest: &AudioManifest) -> Vec<f32> {
+wavyte-core/src/audio/mix.rs:161:pub fn write_mix_to_f32le_file(samples_interleaved: &[f32], out_path: &Path) -> WavyteResult<()> {
+wavyte-core/src/audio/mix.rs:183:fn fade_gain(seg: &AudioSegment, rel_sec: f64, seg_len_samples: u64, sample_rate: u32) -> f32 {
+wavyte-core/src/audio/mix.rs:198:fn push_audio_segment(
+wavyte-core/src/audio/mix.rs:236:fn push_video_audio_segment(
+wavyte-core/src/audio/mix.rs:278:fn push_segment_common(
+wavyte-core/src/audio/mix.rs:321:pub fn frame_to_sample(frame_delta: u64, fps: Fps, sample_rate: u32) -> u64 {
+wavyte-core/src/audio/mix.rs:327:fn intersect_ranges(a: FrameRange, b: FrameRange) -> Option<FrameRange> {
+wavyte-core/src/audio/mix.rs:341:    fn frame_to_sample_uses_rational_fps() {
+wavyte-core/src/audio/mix.rs:348:    fn mix_applies_overlap_and_fades() {
+wavyte-core/src/animation/ease.rs:2:pub enum Ease {
+wavyte-core/src/animation/ease.rs:12:impl Ease {
+wavyte-core/src/animation/ease.rs:13:    pub fn apply(self, t: f64) -> f64 {
+wavyte-core/src/animation/ease.rs:44:    fn endpoints_are_stable() {
+wavyte-core/src/animation/ease.rs:60:    fn monotonic_spot_check() {
+wavyte-core/src/render/cpu.rs:13:pub struct CpuBackend {
+wavyte-core/src/render/cpu.rs:22:struct CpuSurface {
+wavyte-core/src/render/cpu.rs:28:struct VideoFrameDecoder {
+wavyte-core/src/render/cpu.rs:36:impl VideoFrameDecoder {
+wavyte-core/src/render/cpu.rs:37:    fn new(info: std::sync::Arc<media::VideoSourceInfo>) -> Self {
+wavyte-core/src/render/cpu.rs:57:    fn decode_at(&mut self, source_time_s: f64) -> WavyteResult<vello_cpu::Image> {
+wavyte-core/src/render/cpu.rs:78:    fn key_for_time(&self, source_time_s: f64) -> u64 {
+wavyte-core/src/render/cpu.rs:82:    fn prefetch_for_key(&mut self, key_ms: u64) -> WavyteResult<()> {
+wavyte-core/src/render/cpu.rs:108:    fn rgba_to_image(&self, rgba: &[u8]) -> WavyteResult<vello_cpu::Image> {
+wavyte-core/src/render/cpu.rs:116:    fn insert_frame(&mut self, key: u64, image: vello_cpu::Image) {
+wavyte-core/src/render/cpu.rs:126:    fn touch(&mut self, key: u64) {
+wavyte-core/src/render/cpu.rs:134:impl CpuBackend {
+wavyte-core/src/render/cpu.rs:135:    pub fn new(settings: RenderSettings) -> Self {
+wavyte-core/src/render/cpu.rs:147:impl PassBackend for CpuBackend {
+wavyte-core/src/render/cpu.rs:148:    fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()> {
+wavyte-core/src/render/cpu.rs:195:    fn exec_scene(
+wavyte-core/src/render/cpu.rs:221:    fn exec_offscreen(
+wavyte-core/src/render/cpu.rs:266:    fn exec_composite(
+wavyte-core/src/render/cpu.rs:351:    fn readback_rgba8(
+wavyte-core/src/render/cpu.rs:376:impl RenderBackend for CpuBackend {
+wavyte-core/src/render/cpu.rs:377:    fn worker_render_settings(&self) -> Option<RenderSettings> {
+wavyte-core/src/render/cpu.rs:382:fn premul_rgba8(r: u8, g: u8, b: u8, a: u8) -> [u8; 4] {
+wavyte-core/src/render/cpu.rs:388:fn clear_pixmap(pixmap: &mut vello_cpu::Pixmap, rgba: [u8; 4]) {
+wavyte-core/src/render/cpu.rs:395:fn draw_op(
+wavyte-core/src/render/cpu.rs:544:fn affine_to_cpu(a: crate::core::Affine) -> vello_cpu::kurbo::Affine {
+wavyte-core/src/render/cpu.rs:548:fn point_to_cpu(p: crate::core::Point) -> vello_cpu::kurbo::Point {
+wavyte-core/src/render/cpu.rs:552:fn bezpath_to_cpu(path: &crate::core::BezPath) -> vello_cpu::kurbo::BezPath {
+wavyte-core/src/render/cpu.rs:570:fn image_premul_bytes_to_pixmap(
+wavyte-core/src/render/cpu.rs:608:fn image_paint_size(image: &vello_cpu::Image) -> WavyteResult<(f64, f64)> {
+wavyte-core/src/render/cpu.rs:617:impl CpuBackend {
+wavyte-core/src/render/cpu.rs:618:    fn image_paint_for(
+wavyte-core/src/render/cpu.rs:643:    fn font_for_text_asset(
+wavyte-core/src/render/cpu.rs:663:    fn svg_paint_for(
+wavyte-core/src/render/cpu.rs:696:    fn video_paint_for(
+wavyte-core/src/animation/proc.rs:8:pub struct Procedural<T> {
+wavyte-core/src/animation/proc.rs:14:impl<T> Procedural<T> {
+wavyte-core/src/animation/proc.rs:15:    pub fn new(kind: ProceduralKind) -> Self {
+wavyte-core/src/animation/proc.rs:23:pub trait ProcValue: Sized {
+wavyte-core/src/animation/proc.rs:24:    fn from_procedural(kind: &ProceduralKind, ctx: SampleCtx) -> WavyteResult<Self>;
+wavyte-core/src/animation/proc.rs:27:impl<T> Procedural<T>
+wavyte-core/src/animation/proc.rs:31:    pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
+wavyte-core/src/animation/proc.rs:38:pub enum ProceduralKind {
+wavyte-core/src/animation/proc.rs:44:pub enum ProcScalar {
+wavyte-core/src/animation/proc.rs:70:pub struct Rng64 {
+wavyte-core/src/animation/proc.rs:74:impl Rng64 {
+wavyte-core/src/animation/proc.rs:75:    pub fn new(seed: u64) -> Self {
+wavyte-core/src/animation/proc.rs:79:    pub fn next_u64(&mut self) -> u64 {
+wavyte-core/src/animation/proc.rs:88:    pub fn next_f64_01(&mut self) -> f64 {
+wavyte-core/src/animation/proc.rs:95:fn noise01(seed: u64, x: u64) -> f64 {
+wavyte-core/src/animation/proc.rs:100:fn sample_scalar(s: &ProcScalar, fps: Fps, frame: u64, seed: u64) -> f64 {
+wavyte-core/src/animation/proc.rs:159:impl ProcValue for f64 {
+wavyte-core/src/animation/proc.rs:160:    fn from_procedural(kind: &ProceduralKind, ctx: SampleCtx) -> WavyteResult<Self> {
+wavyte-core/src/animation/proc.rs:170:impl ProcValue for f32 {
+wavyte-core/src/animation/proc.rs:171:    fn from_procedural(kind: &ProceduralKind, ctx: SampleCtx) -> WavyteResult<Self> {
+wavyte-core/src/animation/proc.rs:176:impl ProcValue for Vec2 {
+wavyte-core/src/animation/proc.rs:177:    fn from_procedural(kind: &ProceduralKind, ctx: SampleCtx) -> WavyteResult<Self> {
+wavyte-core/src/animation/proc.rs:190:impl ProcValue for Transform2D {
+wavyte-core/src/animation/proc.rs:191:    fn from_procedural(_kind: &ProceduralKind, _ctx: SampleCtx) -> WavyteResult<Self> {
+wavyte-core/src/animation/proc.rs:198:impl ProcValue for crate::core::Rgba8Premul {
+wavyte-core/src/animation/proc.rs:199:    fn from_procedural(_kind: &ProceduralKind, _ctx: SampleCtx) -> WavyteResult<Self> {
+wavyte-core/src/animation/proc.rs:211:    fn ctx(frame: u64, seed: u64) -> SampleCtx {
+wavyte-core/src/animation/proc.rs:221:    fn rng_is_deterministic() {
+wavyte-core/src/animation/proc.rs:230:    fn noise_is_bounded_and_deterministic() {
+wavyte-core/src/animation/proc.rs:247:    fn envelope_basic_boundaries() {
+wavyte-core/src/render/backend.rs:13:pub struct FrameRGBA {
+wavyte-core/src/render/backend.rs:26:pub trait RenderBackend: PassBackend {
+wavyte-core/src/render/backend.rs:27:    fn render_plan(
+wavyte-core/src/render/backend.rs:35:    fn worker_render_settings(&self) -> Option<RenderSettings> {
+wavyte-core/src/render/backend.rs:44:pub enum BackendKind {
+wavyte-core/src/render/backend.rs:50:pub struct RenderSettings {
+wavyte-core/src/render/backend.rs:58:pub fn create_backend(
+wavyte-core/src/animation/ops.rs:3:pub fn delay<T>(inner: Anim<T>, by_frames: u64) -> Anim<T> {
+wavyte-core/src/animation/ops.rs:10:pub fn speed<T>(inner: Anim<T>, factor: f64) -> Anim<T> {
+wavyte-core/src/animation/ops.rs:17:pub fn reverse<T>(inner: Anim<T>, duration_frames: u64) -> Anim<T> {
+wavyte-core/src/animation/ops.rs:24:pub fn loop_<T>(inner: Anim<T>, period_frames: u64, mode: LoopMode) -> Anim<T> {
+wavyte-core/src/animation/ops.rs:32:pub fn mix<T>(a: Anim<T>, b: Anim<T>, t: Anim<f64>) -> Anim<T> {
+wavyte-core/src/animation/ops.rs:40:pub fn sequence(a: Anim<f64>, a_len: u64, b: Anim<f64>) -> Anim<f64> {
+wavyte-core/src/animation/ops.rs:63:pub fn stagger(mut anims: Vec<(u64, Anim<f64>)>) -> Anim<f64> {
+wavyte-core/src/animation/ops.rs:83:    fn ctx(frame: u64) -> SampleCtx {
+wavyte-core/src/animation/ops.rs:93:    fn sequence_switches_at_boundary() {
+wavyte-core/src/render/passes.rs:8:pub trait PassBackend {
+wavyte-core/src/render/passes.rs:9:    fn ensure_surface(&mut self, id: SurfaceId, desc: &SurfaceDesc) -> WavyteResult<()>;
+wavyte-core/src/render/passes.rs:11:    fn exec_scene(&mut self, pass: &ScenePass, assets: &PreparedAssetStore) -> WavyteResult<()>;
+wavyte-core/src/render/passes.rs:13:    fn exec_offscreen(
+wavyte-core/src/render/passes.rs:19:    fn exec_composite(
+wavyte-core/src/render/passes.rs:25:    fn readback_rgba8(
+wavyte-core/src/render/passes.rs:33:pub fn execute_plan<B: PassBackend + ?Sized>(
+wavyte-core/src/render/passes.rs:73:        fn ensure_surface(&mut self, _id: SurfaceId, _desc: &SurfaceDesc) -> WavyteResult<()> {
+wavyte-core/src/render/passes.rs:78:        fn exec_scene(
+wavyte-core/src/render/passes.rs:87:        fn exec_offscreen(
+wavyte-core/src/render/passes.rs:96:        fn exec_composite(
+wavyte-core/src/render/passes.rs:105:        fn readback_rgba8(
+wavyte-core/src/render/passes.rs:122:    fn execute_plan_calls_in_expected_order() {
+wavyte-core/src/render/passes.rs:196:    fn execute_plan_returns_final_frame() {
+wavyte-core/src/animation/anim.rs:9:pub struct SampleCtx {
+wavyte-core/src/animation/anim.rs:16:pub trait Lerp: Sized {
+wavyte-core/src/animation/anim.rs:17:    fn lerp(a: &Self, b: &Self, t: f64) -> Self;
+wavyte-core/src/animation/anim.rs:20:impl Lerp for f64 {
+wavyte-core/src/animation/anim.rs:21:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
+wavyte-core/src/animation/anim.rs:26:impl Lerp for f32 {
+wavyte-core/src/animation/anim.rs:27:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
+wavyte-core/src/animation/anim.rs:32:impl Lerp for Vec2 {
+wavyte-core/src/animation/anim.rs:33:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
+wavyte-core/src/animation/anim.rs:38:impl Lerp for Transform2D {
+wavyte-core/src/animation/anim.rs:39:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
+wavyte-core/src/animation/anim.rs:49:impl Lerp for crate::core::Rgba8Premul {
+wavyte-core/src/animation/anim.rs:50:    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
+wavyte-core/src/animation/anim.rs:51:        fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
+wavyte-core/src/animation/anim.rs:67:pub enum Anim<T> {
+wavyte-core/src/animation/anim.rs:73:impl<T> Anim<T>
+wavyte-core/src/animation/anim.rs:77:    pub fn constant(value: T) -> Self {
+wavyte-core/src/animation/anim.rs:89:    pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
+wavyte-core/src/animation/anim.rs:97:    pub fn validate(&self) -> WavyteResult<()> {
+wavyte-core/src/animation/anim.rs:107:pub struct Keyframes<T> {
+wavyte-core/src/animation/anim.rs:113:impl<T> Keyframes<T>
+wavyte-core/src/animation/anim.rs:117:    pub fn validate(&self) -> WavyteResult<()> {
+wavyte-core/src/animation/anim.rs:131:    pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
+wavyte-core/src/animation/anim.rs:166:pub struct Keyframe<T> {
+wavyte-core/src/animation/anim.rs:173:pub enum InterpMode {
+wavyte-core/src/animation/anim.rs:179:pub enum Expr<T> {
+wavyte-core/src/animation/anim.rs:205:pub enum LoopMode {
+wavyte-core/src/animation/anim.rs:210:impl<T> Expr<T>
+wavyte-core/src/animation/anim.rs:214:    pub fn validate(&self) -> WavyteResult<()> {
+wavyte-core/src/animation/anim.rs:247:    pub fn sample(&self, ctx: SampleCtx) -> WavyteResult<T> {
+wavyte-core/src/animation/anim.rs:248:        fn with_clip_local(mut ctx: SampleCtx, clip_local: FrameIndex) -> SampleCtx {
+wavyte-core/src/animation/anim.rs:325:    fn ctx(frame: u64) -> SampleCtx {
+wavyte-core/src/animation/anim.rs:335:    fn keyframes_hold_is_constant_between_keys() {
+wavyte-core/src/animation/anim.rs:357:    fn keyframes_linear_interpolates() {
+wavyte-core/src/animation/anim.rs:378:    fn expr_reverse_maps_frames() {
+wavyte-core/src/encode/ffmpeg.rs:15:pub struct EncodeConfig {
+wavyte-core/src/encode/ffmpeg.rs:25:pub struct AudioInputConfig {
+wavyte-core/src/encode/ffmpeg.rs:31:impl EncodeConfig {
+wavyte-core/src/encode/ffmpeg.rs:33:    pub fn validate(&self) -> WavyteResult<()> {
+wavyte-core/src/encode/ffmpeg.rs:64:    pub fn with_out_path(mut self, out_path: impl Into<PathBuf>) -> Self {
+wavyte-core/src/encode/ffmpeg.rs:71:pub fn default_mp4_config(
+wavyte-core/src/encode/ffmpeg.rs:88:pub fn is_ffmpeg_on_path() -> bool {
+wavyte-core/src/encode/ffmpeg.rs:99:pub fn ensure_parent_dir(path: &Path) -> WavyteResult<()> {
+wavyte-core/src/encode/ffmpeg.rs:113:pub struct FfmpegEncoder {
+wavyte-core/src/encode/ffmpeg.rs:122:impl FfmpegEncoder {
+wavyte-core/src/encode/ffmpeg.rs:124:    pub fn new(cfg: EncodeConfig, bg_rgba: [u8; 4]) -> WavyteResult<Self> {
+wavyte-core/src/encode/ffmpeg.rs:237:    pub fn encode_frame(&mut self, frame: &FrameRGBA) -> WavyteResult<()> {
+wavyte-core/src/encode/ffmpeg.rs:273:    pub fn finish(mut self) -> WavyteResult<()> {
+wavyte-core/src/encode/ffmpeg.rs:300:fn flatten_to_opaque_rgba8(
+wavyte-core/src/encode/ffmpeg.rs:349:fn mul_div255(x: u16, y: u16) -> u16 {
+wavyte-core/src/encode/ffmpeg.rs:358:    fn config_validation_catches_bad_values() {
+wavyte-core/src/encode/ffmpeg.rs:400:    fn flatten_premul_over_black_produces_expected_rgb() {
+wavyte-core/src/encode/ffmpeg.rs:409:    fn flatten_straight_over_black_produces_expected_rgb() {
+wavyte-core/src/compile/fingerprint.rs:4:pub struct FrameFingerprint {
+wavyte-core/src/compile/fingerprint.rs:9:pub fn fingerprint_eval(eval: &EvaluatedGraph) -> FrameFingerprint {
+wavyte-core/src/compile/fingerprint.rs:69:fn write_json_value_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, v: &serde_json::Value) {
+wavyte-core/src/compile/fingerprint.rs:104:fn write_u8_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, v: u8) {
+wavyte-core/src/compile/fingerprint.rs:109:fn write_u64_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, v: u64) {
+wavyte-core/src/compile/fingerprint.rs:114:fn write_i64_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, v: i64) {
+wavyte-core/src/compile/fingerprint.rs:118:fn write_str_pair(a: &mut Fnv1a64, b: &mut Fnv1a64, s: &str) {
+wavyte-core/src/compile/fingerprint.rs:129:    fn comp_with_opacity(opacity: f64) -> Composition {
+wavyte-core/src/compile/fingerprint.rs:172:    fn fingerprint_is_deterministic_for_same_eval() {
+wavyte-core/src/compile/fingerprint.rs:181:    fn fingerprint_changes_when_scene_changes() {
+wavyte-core/src/render/pipeline.rs:27:pub fn render_frame(
+wavyte-core/src/render/pipeline.rs:44:pub fn render_frames(
+wavyte-core/src/render/pipeline.rs:55:pub struct RenderThreading {
+wavyte-core/src/render/pipeline.rs:62:impl Default for RenderThreading {
+wavyte-core/src/render/pipeline.rs:63:    fn default() -> Self {
+wavyte-core/src/render/pipeline.rs:74:pub struct RenderStats {
+wavyte-core/src/render/pipeline.rs:80:pub fn render_frames_with_stats(
+wavyte-core/src/render/pipeline.rs:146:pub struct RenderToMp4Opts {
+wavyte-core/src/render/pipeline.rs:157:impl Default for RenderToMp4Opts {
+wavyte-core/src/render/pipeline.rs:158:    fn default() -> Self {
+wavyte-core/src/render/pipeline.rs:179:pub fn render_to_mp4(
+wavyte-core/src/render/pipeline.rs:190:pub fn render_to_mp4_with_stats(
+wavyte-core/src/render/pipeline.rs:327:fn render_chunk_sequential(
+wavyte-core/src/render/pipeline.rs:353:struct ChunkParallelOut {
+wavyte-core/src/render/pipeline.rs:359:fn render_chunk_parallel_cpu_unique(
+wavyte-core/src/render/pipeline.rs:440:fn render_chunk_parallel_cpu(
+wavyte-core/src/render/pipeline.rs:492:fn build_thread_pool(threads: Option<usize>) -> WavyteResult<rayon::ThreadPool> {
+wavyte-core/src/render/pipeline.rs:510:fn normalized_chunk_size(chunk_size: usize) -> u64 {
+wavyte-core/src/render/pipeline.rs:518:struct TempFileGuard(Option<std::path::PathBuf>);
+wavyte-core/src/render/pipeline.rs:520:impl Drop for TempFileGuard {
+wavyte-core/src/render/pipeline.rs:521:    fn drop(&mut self) {
+wavyte-core/src/assets/store.rs:18:pub struct PreparedImage {
+wavyte-core/src/assets/store.rs:25:pub struct PreparedSvg {
+wavyte-core/src/assets/store.rs:30:pub struct TextBrushRgba8 {
+wavyte-core/src/assets/store.rs:38:pub struct PreparedText {
+wavyte-core/src/assets/store.rs:44:impl std::fmt::Debug for PreparedText {
+wavyte-core/src/assets/store.rs:45:    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+wavyte-core/src/assets/store.rs:55:pub struct PreparedPath {
+wavyte-core/src/assets/store.rs:60:pub struct PreparedAudio {
+wavyte-core/src/assets/store.rs:67:pub struct PreparedVideo {
+wavyte-core/src/assets/store.rs:73:pub enum PreparedAsset {
+wavyte-core/src/assets/store.rs:83:pub struct AssetId(pub(crate) u64);
+wavyte-core/src/assets/store.rs:85:impl AssetId {
+wavyte-core/src/assets/store.rs:86:    pub fn from_u64(raw: u64) -> Self {
+wavyte-core/src/assets/store.rs:90:    pub fn as_u64(self) -> u64 {
+wavyte-core/src/assets/store.rs:96:pub struct AssetKey {
+wavyte-core/src/assets/store.rs:101:impl AssetKey {
+wavyte-core/src/assets/store.rs:102:    pub fn new(norm_path: String, mut params: Vec<(String, String)>) -> Self {
+wavyte-core/src/assets/store.rs:109:pub struct PreparedAssetStore {
+wavyte-core/src/assets/store.rs:115:impl PreparedAssetStore {
+wavyte-core/src/assets/store.rs:116:    pub fn prepare(comp: &model::Composition, root: impl Into<PathBuf>) -> WavyteResult<Self> {
+wavyte-core/src/assets/store.rs:207:    pub fn root(&self) -> &Path {
+wavyte-core/src/assets/store.rs:211:    pub fn id_for_key(&self, key: &str) -> WavyteResult<AssetId> {
+wavyte-core/src/assets/store.rs:218:    pub fn get(&self, id: AssetId) -> WavyteResult<&PreparedAsset> {
+wavyte-core/src/assets/store.rs:224:    fn key_for(&self, asset: &model::Asset) -> WavyteResult<(u8, AssetKey)> {
+wavyte-core/src/assets/store.rs:272:    fn hash_id_for_key(kind_tag: u8, key: &AssetKey) -> AssetId {
+wavyte-core/src/assets/store.rs:286:    fn read_bytes(&self, norm_path: &str) -> WavyteResult<Vec<u8>> {
+wavyte-core/src/assets/store.rs:294:fn parse_svg_with_options(root: &Path, norm_path: &str, bytes: &[u8]) -> WavyteResult<PreparedSvg> {
+wavyte-core/src/assets/store.rs:313:fn build_svg_fontdb(
+wavyte-core/src/assets/store.rs:331:fn load_fonts_from_dir(db: &mut usvg::fontdb::Database, dir: &Path) {
+wavyte-core/src/assets/store.rs:352:fn make_svg_font_resolver() -> usvg::FontResolver<'static> {
+wavyte-core/src/assets/store.rs:407:pub fn normalize_rel_path(source: &str) -> WavyteResult<String> {
+wavyte-core/src/assets/store.rs:436:fn parse_svg_path(d: &str) -> WavyteResult<BezPath> {
+wavyte-core/src/assets/store.rs:447:pub struct TextLayoutEngine {
+wavyte-core/src/assets/store.rs:453:impl Default for TextLayoutEngine {
+wavyte-core/src/assets/store.rs:454:    fn default() -> Self {
+wavyte-core/src/assets/store.rs:459:impl TextLayoutEngine {
+wavyte-core/src/assets/store.rs:460:    pub fn new() -> Self {
+wavyte-core/src/assets/store.rs:468:    pub fn last_family_name(&self) -> Option<String> {
+wavyte-core/src/assets/store.rs:472:    pub fn layout_plain(
+wavyte-core/src/assets/store.rs:535:    fn normalize_path_slash_normalization() {
+wavyte-core/src/assets/store.rs:543:    fn asset_id_stability_same_input() {
+wavyte-core/src/assets/store.rs:559:    fn prepare_path_assets_without_external_io() {
+wavyte-core/src/assets/store.rs:590:    fn text_layout_smoke_with_local_font_if_present() {
+wavyte-core/src/assets/store.rs:616:    fn prepare_single_image_asset() {
+wavyte-core/src/compile/plan.rs:14:struct EffectCacheKey {
+wavyte-core/src/compile/plan.rs:20:struct TransitionCacheKey {
+wavyte-core/src/compile/plan.rs:62:pub struct RenderPlan {
+wavyte-core/src/compile/plan.rs:71:pub enum Pass {
+wavyte-core/src/compile/plan.rs:79:pub struct ScenePass {
+wavyte-core/src/compile/plan.rs:87:pub struct SurfaceId(pub u32);
+wavyte-core/src/compile/plan.rs:91:pub enum PixelFormat {
+wavyte-core/src/compile/plan.rs:97:pub struct SurfaceDesc {
+wavyte-core/src/compile/plan.rs:105:pub struct OffscreenPass {
+wavyte-core/src/compile/plan.rs:113:pub struct CompositePass {
+wavyte-core/src/compile/plan.rs:120:pub enum CompositeOp {
+wavyte-core/src/compile/plan.rs:141:pub enum DrawOp {
+wavyte-core/src/compile/plan.rs:181:pub fn compile_frame(
+wavyte-core/src/compile/plan.rs:409:fn parse_effect_cached(
+wavyte-core/src/compile/plan.rs:442:fn parse_transition_cached(
+wavyte-core/src/compile/plan.rs:611:    fn store_for(comp: &Composition) -> PreparedAssetStore {
+wavyte-core/src/compile/plan.rs:616:    fn compile_path_emits_fillpath_without_asset_cache() {
+wavyte-core/src/compile/plan.rs:681:    fn compile_applies_inline_effects_to_opacity_and_transform() {
+wavyte-core/src/compile/plan.rs:754:    fn compile_emits_offscreen_blur_pass_and_composites_blurred_surface() {
+wavyte-core/src/compile/plan.rs:845:    fn compile_pairs_crossfade_into_single_composite_op() {
+wavyte-core/src/compile/plan.rs:931:    fn compile_pairs_wipe_into_single_composite_op() {
+wavyte-core/src/compile/plan.rs:1025:    fn compile_does_not_pair_transitions_when_progress_is_not_aligned() {
+wavyte-core/src/layout/solver.rs:9:pub struct LayoutOffsets {
+wavyte-core/src/layout/solver.rs:13:impl LayoutOffsets {
+wavyte-core/src/layout/solver.rs:14:    pub fn offset_for(&self, track_idx: usize, clip_idx: usize) -> Vec2 {
+wavyte-core/src/layout/solver.rs:23:pub fn resolve_layout_offsets(
+wavyte-core/src/layout/solver.rs:34:fn resolve_track_offsets(
+wavyte-core/src/layout/solver.rs:107:fn intrinsic_size_for_asset_key(
+wavyte-core/src/layout/solver.rs:139:fn align_offset<W: Into<f64>, C: Into<f64>, A>(container: W, content: C, align: A) -> f64
+wavyte-core/src/layout/solver.rs:153:enum AlignKind {
+wavyte-core/src/layout/solver.rs:159:impl From<LayoutAlignX> for AlignKind {
+wavyte-core/src/layout/solver.rs:160:    fn from(value: LayoutAlignX) -> Self {
+wavyte-core/src/layout/solver.rs:169:impl From<LayoutAlignY> for AlignKind {
+wavyte-core/src/layout/solver.rs:170:    fn from(value: LayoutAlignY) -> Self {
+wavyte-core/src/layout/solver.rs:184:    fn comp_for_layout(mode: LayoutMode) -> Composition {
+wavyte-core/src/layout/solver.rs:251:    fn hstack_offsets_are_deterministic() {
+wavyte-core/src/layout/solver.rs:260:    fn center_mode_centers_each_clip() {
+wavyte-core/src/assets/svg_raster.rs:4:pub struct SvgRasterKey {
+wavyte-core/src/assets/svg_raster.rs:18:pub fn svg_raster_params(
+wavyte-core/src/assets/svg_raster.rs:22:    fn to_px(v: f32) -> WavyteResult<u32> {
+wavyte-core/src/assets/svg_raster.rs:57:pub fn rasterize_svg_to_premul_rgba8(
+wavyte-core/src/assets/media.rs:11:pub struct VideoSourceInfo {
+wavyte-core/src/assets/media.rs:22:pub struct AudioPcm {
+wavyte-core/src/assets/media.rs:28:impl VideoSourceInfo {
+wavyte-core/src/assets/media.rs:29:    pub fn source_fps(&self) -> f64 {
+wavyte-core/src/assets/media.rs:38:pub fn video_source_time_sec(asset: &VideoAsset, clip_local_frames: u64, fps: crate::Fps) -> f64 {
+wavyte-core/src/assets/media.rs:47:pub fn audio_source_time_sec(asset: &AudioAsset, clip_local_frames: u64, fps: crate::Fps) -> f64 {
+wavyte-core/src/assets/media.rs:57:pub fn probe_video(source_path: &Path) -> WavyteResult<VideoSourceInfo> {
+wavyte-core/src/assets/media.rs:134:pub fn probe_video(_source_path: &Path) -> WavyteResult<VideoSourceInfo> {
+wavyte-core/src/assets/media.rs:141:pub fn decode_video_frame_rgba8(
+wavyte-core/src/assets/media.rs:213:pub fn decode_video_frame_rgba8(
+wavyte-core/src/assets/media.rs:234:pub fn decode_audio_f32_stereo(path: &Path, sample_rate: u32) -> WavyteResult<AudioPcm> {
+wavyte-core/src/assets/media.rs:294:pub fn decode_audio_f32_stereo(_path: &Path, _sample_rate: u32) -> WavyteResult<AudioPcm> {
+wavyte-core/src/assets/media.rs:301:fn parse_ff_ratio(s: &str) -> Option<(u32, u32)> {
+wavyte-core/src/assets/media.rs:316:    fn source_time_mapping_applies_trim_and_rate() {
+wavyte-core/src/transform/non_linear.rs:4:pub fn clamp01(x: f64) -> f64 {
+wavyte-core/src/assets/decode.rs:10:pub fn decode_image(bytes: &[u8]) -> WavyteResult<PreparedImage> {
+wavyte-core/src/assets/decode.rs:25:pub fn parse_svg(bytes: &[u8]) -> WavyteResult<PreparedSvg> {
+wavyte-core/src/assets/decode.rs:33:fn premultiply_rgba8_in_place(rgba: &mut [u8]) {
+wavyte-core/src/assets/decode.rs:55:    fn decode_image_png_dimensions_and_premul() {
+wavyte-core/src/assets/decode.rs:79:    fn decode_svg_parse_ok_and_err() {
+wavyte-core/src/transform/linear.rs:6:pub fn lerp_vec2(a: Vec2, b: Vec2, t: f64) -> Vec2 {
+wavyte-core/src/composition/dsl.rs:13:pub struct CompositionBuilder {
+wavyte-core/src/composition/dsl.rs:22:impl CompositionBuilder {
+wavyte-core/src/composition/dsl.rs:23:    pub fn new(fps: crate::core::Fps, canvas: Canvas, duration: FrameIndex) -> Self {
+wavyte-core/src/composition/dsl.rs:34:    pub fn seed(mut self, seed: u64) -> Self {
+wavyte-core/src/composition/dsl.rs:39:    pub fn asset(mut self, key: impl Into<String>, asset: Asset) -> WavyteResult<Self> {
+wavyte-core/src/composition/dsl.rs:50:    pub fn track(mut self, track: Track) -> Self {
+wavyte-core/src/composition/dsl.rs:55:    pub fn video_asset(
+wavyte-core/src/composition/dsl.rs:63:    pub fn audio_asset(
+wavyte-core/src/composition/dsl.rs:71:    pub fn build(self) -> WavyteResult<Composition> {
+wavyte-core/src/composition/dsl.rs:85:pub fn video_asset(source: impl Into<String>) -> VideoAsset {
+wavyte-core/src/composition/dsl.rs:98:pub fn audio_asset(source: impl Into<String>) -> AudioAsset {
+wavyte-core/src/composition/dsl.rs:111:pub struct TrackBuilder {
+wavyte-core/src/composition/dsl.rs:123:impl TrackBuilder {
+wavyte-core/src/composition/dsl.rs:124:    pub fn new(name: impl Into<String>) -> Self {
+wavyte-core/src/composition/dsl.rs:138:    pub fn z_base(mut self, z: i32) -> Self {
+wavyte-core/src/composition/dsl.rs:143:    pub fn clip(mut self, clip: Clip) -> Self {
+wavyte-core/src/composition/dsl.rs:148:    pub fn layout_mode(mut self, mode: crate::LayoutMode) -> Self {
+wavyte-core/src/composition/dsl.rs:153:    pub fn layout_gap_px(mut self, gap: f64) -> Self {
+wavyte-core/src/composition/dsl.rs:158:    pub fn layout_padding(mut self, padding: crate::Edges) -> Self {
+wavyte-core/src/composition/dsl.rs:163:    pub fn layout_align(mut self, x: crate::LayoutAlignX, y: crate::LayoutAlignY) -> Self {
+wavyte-core/src/composition/dsl.rs:169:    pub fn layout_grid_columns(mut self, columns: u32) -> Self {
+wavyte-core/src/composition/dsl.rs:174:    pub fn build(self) -> WavyteResult<Track> {
+wavyte-core/src/composition/dsl.rs:192:pub struct ClipBuilder {
+wavyte-core/src/composition/dsl.rs:205:impl ClipBuilder {
+wavyte-core/src/composition/dsl.rs:206:    pub fn new(id: impl Into<String>, asset_key: impl Into<String>, range: FrameRange) -> Self {
+wavyte-core/src/composition/dsl.rs:221:    pub fn z_offset(mut self, z: i32) -> Self {
+wavyte-core/src/composition/dsl.rs:226:    pub fn opacity(mut self, a: Anim<f64>) -> Self {
+wavyte-core/src/composition/dsl.rs:231:    pub fn transform(mut self, t: Anim<Transform2D>) -> Self {
+wavyte-core/src/composition/dsl.rs:236:    pub fn effect(mut self, fx: EffectInstance) -> Self {
+wavyte-core/src/composition/dsl.rs:241:    pub fn transition_in(mut self, tr: TransitionSpec) -> Self {
+wavyte-core/src/composition/dsl.rs:246:    pub fn transition_out(mut self, tr: TransitionSpec) -> Self {
+wavyte-core/src/composition/dsl.rs:251:    pub fn build(self) -> WavyteResult<Clip> {
+wavyte-core/src/composition/dsl.rs:288:    fn builders_create_expected_structure() {
+wavyte-core/src/composition/dsl.rs:338:    fn duplicate_asset_key_is_rejected() {
+wavyte-core/src/eval/evaluator.rs:9:pub struct EvaluatedGraph {
+wavyte-core/src/eval/evaluator.rs:15:pub struct EvaluatedClipNode {
+wavyte-core/src/eval/evaluator.rs:29:pub struct ResolvedEffect {
+wavyte-core/src/eval/evaluator.rs:35:pub struct ResolvedTransition {
+wavyte-core/src/eval/evaluator.rs:41:pub struct Evaluator;
+wavyte-core/src/eval/evaluator.rs:43:impl Evaluator {
+wavyte-core/src/eval/evaluator.rs:45:    pub fn eval_frame(comp: &Composition, frame: FrameIndex) -> WavyteResult<EvaluatedGraph> {
+wavyte-core/src/eval/evaluator.rs:50:    pub fn eval_frame_with_layout(
+wavyte-core/src/eval/evaluator.rs:66:    fn eval_frame_with_layout_impl(
+wavyte-core/src/eval/evaluator.rs:111:fn eval_clip(
+wavyte-core/src/eval/evaluator.rs:159:fn resolve_effect(e: &EffectInstance) -> WavyteResult<ResolvedEffect> {
+wavyte-core/src/eval/evaluator.rs:169:fn resolve_transition_in(clip: &Clip, frame: FrameIndex) -> Option<ResolvedTransition> {
+wavyte-core/src/eval/evaluator.rs:180:fn resolve_transition_out(clip: &Clip, frame: FrameIndex) -> Option<ResolvedTransition> {
+wavyte-core/src/eval/evaluator.rs:186:enum TransitionEdge {
+wavyte-core/src/eval/evaluator.rs:191:fn resolve_transition_window(
+wavyte-core/src/eval/evaluator.rs:241:fn stable_hash64(seed: u64, s: &str) -> u64 {
+wavyte-core/src/eval/evaluator.rs:262:    fn basic_comp(
+wavyte-core/src/eval/evaluator.rs:318:    fn visibility_respects_frame_range() {
+wavyte-core/src/eval/evaluator.rs:351:    fn opacity_is_clamped() {
+wavyte-core/src/eval/evaluator.rs:359:    fn transition_progress_boundaries() {
+wavyte-core/src/transform/affine.rs:6:pub fn compose(a: Affine, b: Affine) -> Affine {
+wavyte-core/src/transform/affine.rs:11:pub fn identity() -> Affine {
+wavyte-core/src/foundation/math.rs:4:impl Fnv1a64 {
+wavyte-core/src/foundation/math.rs:51:    fn fnv_seeded_hash_is_stable() {
+wavyte-core/src/foundation/math.rs:61:    fn mul_div255_variants_align() {
+wavyte-core/src/composition/model.rs:19:pub struct Composition {
+wavyte-core/src/composition/model.rs:30:pub struct Track {
+wavyte-core/src/composition/model.rs:49:pub enum LayoutMode {
+wavyte-core/src/composition/model.rs:59:pub struct Edges {
+wavyte-core/src/composition/model.rs:71:pub enum LayoutAlignX {
+wavyte-core/src/composition/model.rs:79:pub enum LayoutAlignY {
+wavyte-core/src/composition/model.rs:86:fn default_layout_grid_columns() -> u32 {
+wavyte-core/src/composition/model.rs:92:pub struct Clip {
+wavyte-core/src/composition/model.rs:105:pub struct ClipProps {
+wavyte-core/src/composition/model.rs:113:pub enum BlendMode {
+wavyte-core/src/composition/model.rs:120:pub enum Asset {
+wavyte-core/src/composition/model.rs:130:pub struct TextAsset {
+wavyte-core/src/composition/model.rs:140:fn default_text_color_rgba8() -> [u8; 4] {
+wavyte-core/src/composition/model.rs:145:pub struct SvgAsset {
+wavyte-core/src/composition/model.rs:150:pub struct PathAsset {
+wavyte-core/src/composition/model.rs:155:pub struct ImageAsset {
+wavyte-core/src/composition/model.rs:160:pub struct VideoAsset {
+wavyte-core/src/composition/model.rs:179:pub struct AudioAsset {
+wavyte-core/src/composition/model.rs:197:fn default_playback_rate() -> f64 {
+wavyte-core/src/composition/model.rs:201:fn default_volume() -> f64 {
+wavyte-core/src/composition/model.rs:206:pub struct EffectInstance {
+wavyte-core/src/composition/model.rs:213:pub struct TransitionSpec {
+wavyte-core/src/composition/model.rs:221:impl Composition {
+wavyte-core/src/composition/model.rs:222:    pub fn validate(&self) -> WavyteResult<()> {
+wavyte-core/src/composition/model.rs:352:fn validate_rel_source(source: &str, field: &str) -> WavyteResult<()> {
+wavyte-core/src/composition/model.rs:374:fn validate_media_controls(
+wavyte-core/src/composition/model.rs:418:impl TransitionSpec {
+wavyte-core/src/composition/model.rs:419:    pub fn validate(&self) -> WavyteResult<()> {
+wavyte-core/src/composition/model.rs:442:    fn basic_comp() -> Composition {
+wavyte-core/src/composition/model.rs:502:    fn json_roundtrip() {
+wavyte-core/src/composition/model.rs:511:    fn validate_rejects_missing_asset() {
+wavyte-core/src/composition/model.rs:518:    fn validate_rejects_out_of_bounds_range() {
+wavyte-core/src/composition/model.rs:528:    fn validate_rejects_bad_fps() {
+wavyte-core/src/composition/model.rs:535:    fn media_assets_serde_defaults_and_validation() {
+wavyte-core/src/composition/model.rs:560:    fn media_validation_rejects_non_positive_playback_rate() {
+wavyte-core/src/foundation/core.rs:8:pub struct FrameIndex(pub u64);
+wavyte-core/src/foundation/core.rs:11:pub struct FrameRange {
+wavyte-core/src/foundation/core.rs:16:impl FrameRange {
+wavyte-core/src/foundation/core.rs:17:    pub fn new(start: FrameIndex, end: FrameIndex) -> WavyteResult<Self> {
+wavyte-core/src/foundation/core.rs:24:    pub fn len_frames(self) -> u64 {
+wavyte-core/src/foundation/core.rs:28:    pub fn is_empty(self) -> bool {
+wavyte-core/src/foundation/core.rs:32:    pub fn contains(self, f: FrameIndex) -> bool {
+wavyte-core/src/foundation/core.rs:36:    pub fn clamp(self, f: FrameIndex) -> FrameIndex {
+wavyte-core/src/foundation/core.rs:44:    pub fn shift(self, delta: i64) -> Self {
+wavyte-core/src/foundation/core.rs:45:        fn shift_idx(v: u64, delta: i64) -> u64 {
+wavyte-core/src/foundation/core.rs:61:pub struct Fps {
+wavyte-core/src/foundation/core.rs:66:impl Fps {
+wavyte-core/src/foundation/core.rs:67:    pub fn new(num: u32, den: u32) -> WavyteResult<Self> {
+wavyte-core/src/foundation/core.rs:77:    pub fn as_f64(self) -> f64 {
+wavyte-core/src/foundation/core.rs:81:    pub fn frame_duration_secs(self) -> f64 {
+wavyte-core/src/foundation/core.rs:85:    pub fn frames_to_secs(self, frames: u64) -> f64 {
+wavyte-core/src/foundation/core.rs:89:    pub fn secs_to_frames_floor(self, secs: f64) -> u64 {
+wavyte-core/src/foundation/core.rs:95:pub struct Canvas {
+wavyte-core/src/foundation/core.rs:102:pub struct Rgba8Premul {
+wavyte-core/src/foundation/core.rs:109:impl Rgba8Premul {
+wavyte-core/src/foundation/core.rs:110:    pub fn transparent() -> Self {
+wavyte-core/src/foundation/core.rs:119:    pub fn from_straight_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+wavyte-core/src/foundation/core.rs:120:        fn premul(c: u8, a: u8) -> u8 {
+wavyte-core/src/foundation/core.rs:136:pub struct Transform2D {
+wavyte-core/src/foundation/core.rs:143:impl Default for Transform2D {
+wavyte-core/src/foundation/core.rs:144:    fn default() -> Self {
+wavyte-core/src/foundation/core.rs:154:impl Transform2D {
+wavyte-core/src/foundation/core.rs:155:    pub fn to_affine(self) -> kurbo::Affine {
+wavyte-core/src/foundation/core.rs:173:    fn frame_range_contains_boundaries() {
+wavyte-core/src/foundation/core.rs:182:    fn fps_frames_secs_roundtrip_floor() {
+wavyte-core/src/foundation/core.rs:189:    fn transform_to_affine_identity_and_translation() {
+wavyte-core/src/foundation/error.rs:1:pub type WavyteResult<T> = Result<T, WavyteError>;
+wavyte-core/src/foundation/error.rs:4:pub enum WavyteError {
+wavyte-core/src/foundation/error.rs:21:impl WavyteError {
+wavyte-core/src/foundation/error.rs:22:    pub fn validation(msg: impl Into<String>) -> Self {
+wavyte-core/src/foundation/error.rs:26:    pub fn animation(msg: impl Into<String>) -> Self {
+wavyte-core/src/foundation/error.rs:30:    pub fn evaluation(msg: impl Into<String>) -> Self {
+wavyte-core/src/foundation/error.rs:34:    pub fn serde(msg: impl Into<String>) -> Self {
+wavyte-core/src/foundation/error.rs:44:    fn display_prefixes_are_stable() {
+wavyte-core/src/foundation/error.rs:68:    fn other_preserves_source() {
+wavyte-core/src/effects/transitions.rs:7:pub enum WipeDir {
+wavyte-core/src/effects/transitions.rs:15:pub enum TransitionKind {
+wavyte-core/src/effects/transitions.rs:20:pub fn parse_transition_kind_params(
+wavyte-core/src/effects/transitions.rs:81:pub fn parse_transition(spec: &TransitionSpec) -> WavyteResult<TransitionKind> {
+wavyte-core/src/effects/transitions.rs:91:    fn wipe_dir_parses_aliases() {
+wavyte-core/src/effects/transitions.rs:108:    fn wipe_soft_edge_is_clamped() {
+wavyte-core/src/effects/composite.rs:5:pub type PremulRgba8 = [u8; 4];
+wavyte-core/src/effects/composite.rs:7:pub fn over(dst: PremulRgba8, src: PremulRgba8, opacity: f32) -> PremulRgba8 {
+wavyte-core/src/effects/composite.rs:32:pub fn crossfade(a: PremulRgba8, b: PremulRgba8, t: f32) -> PremulRgba8 {
+wavyte-core/src/effects/composite.rs:46:pub fn over_in_place(dst: &mut [u8], src: &[u8], opacity: f32) -> WavyteResult<()> {
+wavyte-core/src/effects/composite.rs:59:pub fn crossfade_over_in_place(dst: &mut [u8], a: &[u8], b: &[u8], t: f32) -> WavyteResult<()> {
+wavyte-core/src/effects/composite.rs:77:pub fn wipe_over_in_place(
+wavyte-core/src/effects/composite.rs:143:pub struct WipeParams {
+wavyte-core/src/effects/composite.rs:151:fn mul_div255(x: u16, y: u16) -> u8 {
+wavyte-core/src/effects/composite.rs:155:fn add_sat_u8(a: u8, b: u8) -> u8 {
+wavyte-core/src/effects/composite.rs:159:fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+wavyte-core/src/effects/composite.rs:175:    fn over_opacity_0_is_noop() {
+wavyte-core/src/effects/composite.rs:182:    fn over_src_alpha_0_is_noop() {
+wavyte-core/src/effects/composite.rs:189:    fn over_src_opaque_replaces_dst() {
+wavyte-core/src/effects/composite.rs:196:    fn over_dst_transparent_returns_scaled_src() {
+wavyte-core/src/effects/composite.rs:203:    fn crossfade_t_0_is_a_and_t_1_is_b() {
+wavyte-core/src/effects/composite.rs:211:    fn wipe_ltr_endpoints_match_a_and_b() {
+wavyte-core/src/effects/composite.rs:253:    fn wipe_ltr_midpoint_splits_image() {
+wavyte-core/src/effects/composite.rs:280:    fn wipe_soft_edge_blends_near_boundary() {
+wavyte-core/src/effects/composite.rs:310:    fn wipe_negative_soft_edge_is_treated_as_zero() {
+wavyte-core/src/effects/fx.rs:8:pub enum Effect {
+wavyte-core/src/effects/fx.rs:15:pub struct InlineFx {
+wavyte-core/src/effects/fx.rs:20:impl Default for InlineFx {
+wavyte-core/src/effects/fx.rs:21:    fn default() -> Self {
+wavyte-core/src/effects/fx.rs:30:pub enum PassFx {
+wavyte-core/src/effects/fx.rs:35:pub struct FxPipeline {
+wavyte-core/src/effects/fx.rs:40:pub fn parse_effect(inst: &EffectInstance) -> WavyteResult<Effect> {
+wavyte-core/src/effects/fx.rs:88:pub fn normalize_effects(effects: &[Effect]) -> FxPipeline {
+wavyte-core/src/effects/fx.rs:116:fn get_u32(obj: &serde_json::Value, key: &str) -> WavyteResult<u32> {
+wavyte-core/src/effects/fx.rs:131:fn get_f32(obj: &serde_json::Value, key: &str) -> WavyteResult<f32> {
+wavyte-core/src/effects/fx.rs:151:fn parse_affine(params: &serde_json::Value) -> WavyteResult<Affine> {
+wavyte-core/src/effects/fx.rs:238:    fn inst(kind: &str, params: serde_json::Value) -> EffectInstance {
+wavyte-core/src/effects/fx.rs:246:    fn parse_opacity_mul() {
+wavyte-core/src/effects/fx.rs:252:    fn normalize_folds_opacity_and_drops_noop_blur() {
+wavyte-core/src/effects/blur.rs:3:pub fn blur_rgba8_premul(
+wavyte-core/src/effects/blur.rs:32:fn gaussian_kernel_q16(radius: u32, sigma: f32) -> WavyteResult<Vec<u32>> {
+wavyte-core/src/effects/blur.rs:75:fn horizontal_pass(src: &[u8], dst: &mut [u8], width: u32, height: u32, k: &[u32]) {
+wavyte-core/src/effects/blur.rs:97:fn vertical_pass(src: &[u8], dst: &mut [u8], width: u32, height: u32, k: &[u32]) {
+wavyte-core/src/effects/blur.rs:120:fn q16_to_u8(acc: u64) -> u8 {
+wavyte-core/src/effects/blur.rs:130:    fn blur_radius_0_is_identity() {
+wavyte-core/src/effects/blur.rs:137:    fn blur_constant_image_is_identity() {
+wavyte-core/src/effects/blur.rs:146:    fn blur_spreads_energy_from_single_pixel() {
 ```
