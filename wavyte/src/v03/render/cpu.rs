@@ -2986,4 +2986,84 @@ mod tests {
         .unwrap();
         assert_eq!(dst, b);
     }
+
+    #[test]
+    fn surface_pool_retained_bytes_plateau_after_warmup() {
+        let mut assets = BTreeMap::new();
+        assets.insert("solid".to_owned(), AssetDef::SolidRect { color: None });
+
+        let frames = 300u64;
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 64,
+                height: 64,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: frames,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Group,
+                    children: vec![NodeDef {
+                        id: "a".to_owned(),
+                        kind: NodeKindDef::Leaf {
+                            asset: "solid".to_owned(),
+                        },
+                        range: [0, frames],
+                        transform: Default::default(),
+                        opacity: AnimDef::Constant(1.0),
+                        layout: None,
+                        effects: vec![],
+                        mask: None,
+                        transition_in: None,
+                        transition_out: None,
+                    }],
+                },
+                range: [0, frames],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                layout: None,
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let expr = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(expr);
+
+        let assets_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .to_path_buf();
+        let mut backend = CpuBackendV03::new(assets_root, CpuBackendOpts::default());
+
+        let mut retained = Vec::<usize>::with_capacity(frames as usize);
+        for f in 0..frames {
+            let g = eval.eval_frame(&norm.ir, f).unwrap();
+            let plan = compile_frame(&norm.ir, g);
+            let _ = backend
+                .render_plan(&norm.ir, &norm.interner, g, &plan)
+                .unwrap();
+            let st = backend.pool.as_ref().unwrap().stats();
+            retained.push(st.retained_bytes);
+        }
+
+        let warmup = 10usize.min(retained.len());
+        let steady = &retained[warmup..];
+        if steady.is_empty() {
+            return;
+        }
+        let min = *steady.iter().min().unwrap();
+        let max = *steady.iter().max().unwrap();
+        assert_eq!(
+            min, max,
+            "surface pool retained bytes should plateau after warmup (min={min}, max={max})"
+        );
+    }
 }

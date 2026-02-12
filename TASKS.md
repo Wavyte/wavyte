@@ -301,7 +301,7 @@ Goal: pooled execution of DAG plan with parallel scheduling and correct kernels.
 - Ensure branch-free inner loops, dispatch outside loops.
 - Validation: canonical verify command set.
 
-- [ ] Commit 6.8: Surface pool plateau gate
+- [x] Commit 6.8: Surface pool plateau gate
 - Render 300 frames and assert pool bytes plateau after warmup.
 - Validation: canonical verify command set.
 
