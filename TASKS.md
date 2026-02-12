@@ -292,7 +292,7 @@ Goal: pooled execution of DAG plan with parallel scheduling and correct kernels.
 - Alpha/luma/stencil modes, mode-selected function outside pixel loop.
 - Validation: canonical verify command set.
 
-- [ ] Commit 6.6: Implement color matrix kernel
+- [x] Commit 6.6: Implement color matrix kernel
 - Single-pass matrix; add correctness tests on small buffers.
 - Validation: canonical verify command set.
 

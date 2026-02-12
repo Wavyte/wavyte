@@ -1009,6 +1009,54 @@ impl CpuBackendV03 {
         Ok(())
     }
 
+    fn exec_color_matrix_pass(
+        &mut self,
+        matrix: [f32; 20],
+        surfaces: &mut ExecSurfaces<'_>,
+        inputs: &SmallVec<[SurfaceId; 4]>,
+        out: SurfaceId,
+    ) -> WavyteResult<()> {
+        let Some(&src_id) = inputs.first() else {
+            return Err(WavyteError::evaluation(
+                "ColorMatrix pass expects 1 input surface",
+            ));
+        };
+        let desc = surfaces.desc(out);
+        surfaces.ensure(out, desc)?;
+        let expected = (desc.width as usize)
+            .saturating_mul(desc.height as usize)
+            .saturating_mul(4);
+
+        self.blur_scratch_b.resize(expected, 0);
+        {
+            let src_pm = surfaces
+                .pixmaps
+                .get(src_id.0 as usize)
+                .and_then(|x| x.as_ref())
+                .ok_or_else(|| WavyteError::evaluation("ColorMatrix input surface missing"))?;
+            let src = src_pm.data_as_u8_slice();
+            if src.len() != expected {
+                return Err(WavyteError::evaluation(
+                    "ColorMatrix input buffer size mismatch",
+                ));
+            }
+            self.blur_scratch_b.copy_from_slice(src);
+        }
+
+        let dst_pm = surfaces.pixmaps[out.0 as usize]
+            .as_mut()
+            .ok_or_else(|| WavyteError::evaluation("ColorMatrix output surface missing"))?;
+        let dst = dst_pm.data_as_u8_slice_mut();
+        if dst.len() != expected {
+            return Err(WavyteError::evaluation(
+                "ColorMatrix output buffer size mismatch",
+            ));
+        }
+
+        color_matrix_rgba8_premul(&self.blur_scratch_b, dst, matrix);
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_leaves_to(
         &mut self,
@@ -1104,6 +1152,11 @@ impl RenderBackendV03 for CpuBackendV03 {
                         &op.inputs,
                         op.output,
                     )?;
+                }
+                OpKind::Pass {
+                    fx: crate::v03::compile::plan::PassFx::ColorMatrix { matrix },
+                } => {
+                    self.exec_color_matrix_pass(*matrix, &mut surfaces, &op.inputs, op.output)?;
                 }
                 other => {
                     return Err(WavyteError::evaluation(format!(
@@ -1481,6 +1534,38 @@ fn mask_apply_rgba8_premul(
     }
 }
 
+fn color_matrix_rgba8_premul(src: &[u8], dst: &mut [u8], m: [f32; 20]) {
+    debug_assert_eq!(src.len(), dst.len());
+    for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+        let pr = s[0] as f32 / 255.0;
+        let pg = s[1] as f32 / 255.0;
+        let pb = s[2] as f32 / 255.0;
+        let pa = s[3] as f32 / 255.0;
+
+        // Convert premul -> straight for matrix application.
+        let inv_a = if pa > 0.0 { 1.0 / pa } else { 0.0 };
+        let r = pr * inv_a;
+        let g = pg * inv_a;
+        let b = pb * inv_a;
+        let a = pa;
+
+        let out_r = (m[0] * r + m[1] * g + m[2] * b + m[3] * a + m[4]).clamp(0.0, 1.0);
+        let out_g = (m[5] * r + m[6] * g + m[7] * b + m[8] * a + m[9]).clamp(0.0, 1.0);
+        let out_b = (m[10] * r + m[11] * g + m[12] * b + m[13] * a + m[14]).clamp(0.0, 1.0);
+        let out_a = (m[15] * r + m[16] * g + m[17] * b + m[18] * a + m[19]).clamp(0.0, 1.0);
+
+        // Convert straight -> premul.
+        let pr = (out_r * out_a).clamp(0.0, 1.0);
+        let pg = (out_g * out_a).clamp(0.0, 1.0);
+        let pb = (out_b * out_a).clamp(0.0, 1.0);
+
+        d[0] = (pr * 255.0).round().clamp(0.0, 255.0) as u8;
+        d[1] = (pg * 255.0).round().clamp(0.0, 255.0) as u8;
+        d[2] = (pb * 255.0).round().clamp(0.0, 255.0) as u8;
+        d[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+}
+
 fn premul_over_in_place(dst: &mut [u8], src: &[u8]) -> WavyteResult<()> {
     if dst.len() != src.len() || !dst.len().is_multiple_of(4) {
         return Err(WavyteError::evaluation(
@@ -1676,5 +1761,33 @@ mod tests {
             false,
         );
         assert_eq!(dst, src);
+    }
+
+    #[test]
+    fn color_matrix_identity_is_identity() {
+        let src = vec![10u8, 20, 30, 40, 50, 60, 70, 80];
+        let mut dst = vec![0u8; src.len()];
+        let id = [
+            1.0, 0.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0, 0.0, //
+        ];
+        color_matrix_rgba8_premul(&src, &mut dst, id);
+        assert_eq!(src, dst);
+    }
+
+    #[test]
+    fn color_matrix_zero_alpha_makes_pixels_transparent() {
+        let src = vec![10u8, 20, 30, 255];
+        let mut dst = vec![0u8; src.len()];
+        let zero_a = [
+            1.0, 0.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 0.0, 0.0, 0.0, //
+        ];
+        color_matrix_rgba8_premul(&src, &mut dst, zero_a);
+        assert_eq!(dst, vec![0, 0, 0, 0]);
     }
 }
