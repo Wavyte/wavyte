@@ -64,6 +64,12 @@ struct GradientKey {
     h: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct BlurKernelKey {
+    radius_px: u32,
+    sigma_bits: u32,
+}
+
 struct VideoFrameDecoder {
     info: Arc<VideoSourceInfo>,
     frame_cache: HashMap<u64, vello_cpu::Image>,
@@ -140,6 +146,10 @@ pub(crate) struct CpuBackendV03 {
     gradient_cache: HashMap<GradientKey, vello_cpu::Image>,
 
     video_decoders: Vec<Option<VideoFrameDecoder>>,
+
+    blur_kernel_cache: HashMap<BlurKernelKey, Arc<Vec<u32>>>,
+    blur_scratch_a: Vec<u8>,
+    blur_scratch_b: Vec<u8>,
 }
 
 impl CpuBackendV03 {
@@ -158,6 +168,9 @@ impl CpuBackendV03 {
             noise_cache: HashMap::new(),
             gradient_cache: HashMap::new(),
             video_decoders: Vec::new(),
+            blur_kernel_cache: HashMap::new(),
+            blur_scratch_a: Vec::new(),
+            blur_scratch_b: Vec::new(),
         }
     }
 
@@ -822,6 +835,80 @@ impl CpuBackendV03 {
         })
     }
 
+    fn exec_blur_pass(
+        &mut self,
+        fx_radius_px: u32,
+        fx_sigma: f32,
+        surfaces: &mut ExecSurfaces<'_>,
+        inputs: &SmallVec<[SurfaceId; 4]>,
+        out: SurfaceId,
+    ) -> WavyteResult<()> {
+        let Some(&src_id) = inputs.first() else {
+            return Err(WavyteError::evaluation("Blur pass expects 1 input surface"));
+        };
+        let desc = surfaces.desc(out);
+        surfaces.ensure(out, desc)?;
+
+        let (w, h) = (desc.width, desc.height);
+        let expected = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+
+        // Kernel and scratch are op-level allocations only (cached after warmup).
+        let sigma_bits = fx_sigma.to_bits();
+        let key = BlurKernelKey {
+            radius_px: fx_radius_px,
+            sigma_bits,
+        };
+        let kernel = if let Some(k) = self.blur_kernel_cache.get(&key).cloned() {
+            k
+        } else {
+            let k = gaussian_kernel_q16(fx_radius_px, fx_sigma)?;
+            let a = Arc::new(k);
+            self.blur_kernel_cache.insert(key, a.clone());
+            a
+        };
+
+        self.blur_scratch_a.resize(expected, 0);
+        self.blur_scratch_b.resize(expected, 0);
+
+        // Copy src into scratch first to avoid alias/borrow issues. This is still allocation-free
+        // after warmup.
+        {
+            let src_pm = surfaces
+                .pixmaps
+                .get(src_id.0 as usize)
+                .and_then(|x| x.as_ref())
+                .ok_or_else(|| WavyteError::evaluation("Blur input surface missing"))?;
+            let src_bytes = src_pm.data_as_u8_slice();
+            if src_bytes.len() != expected {
+                return Err(WavyteError::evaluation(
+                    "Blur input surface buffer size mismatch",
+                ));
+            }
+            self.blur_scratch_b.copy_from_slice(src_bytes);
+        }
+
+        let dst_pm = surfaces.pixmaps[out.0 as usize]
+            .as_mut()
+            .ok_or_else(|| WavyteError::evaluation("Blur output surface missing"))?;
+        let dst_bytes = dst_pm.data_as_u8_slice_mut();
+        if dst_bytes.len() != expected {
+            return Err(WavyteError::evaluation(
+                "Blur output surface buffer size mismatch",
+            ));
+        }
+
+        blur_rgba8_premul_q16(
+            &self.blur_scratch_b,
+            dst_bytes,
+            &mut self.blur_scratch_a,
+            w,
+            h,
+            &kernel,
+        );
+
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_leaves_to(
         &mut self,
@@ -901,6 +988,11 @@ impl RenderBackendV03 for CpuBackendV03 {
                 }
                 OpKind::MaskGen { source } => {
                     self.exec_mask_gen(ir, interner, source, &mut surfaces, op.output)?;
+                }
+                OpKind::Pass {
+                    fx: crate::v03::compile::plan::PassFx::Blur { radius_px, sigma },
+                } => {
+                    self.exec_blur_pass(*radius_px, *sigma, &mut surfaces, &op.inputs, op.output)?;
                 }
                 other => {
                     return Err(WavyteError::evaluation(format!(
@@ -1095,6 +1187,116 @@ fn rgba_straight_to_image_premul(
     rgba_premul_to_image(&tmp, width, height)
 }
 
+fn gaussian_kernel_q16(radius: u32, sigma: f32) -> WavyteResult<Vec<u32>> {
+    if radius == 0 {
+        return Ok(vec![1 << 16]);
+    }
+    if !sigma.is_finite() || sigma <= 0.0 {
+        return Err(WavyteError::validation("blur sigma must be finite and > 0"));
+    }
+
+    let r = radius as i32;
+    let mut weights_f = Vec::<f64>::with_capacity((2 * r + 1) as usize);
+    let mut sum = 0.0f64;
+    let sigma = sigma as f64;
+    let denom = 2.0 * sigma * sigma;
+    for i in -r..=r {
+        let x = i as f64;
+        let w = (-x * x / denom).exp();
+        weights_f.push(w);
+        sum += w;
+    }
+    if sum <= 0.0 {
+        return Err(WavyteError::evaluation("gaussian kernel sum is zero"));
+    }
+
+    let mut weights = Vec::<u32>::with_capacity(weights_f.len());
+    let mut acc: i64 = 0;
+    for &wf in &weights_f {
+        let q = ((wf / sum) * 65536.0).round() as i64;
+        let q = q.clamp(0, 65536);
+        weights.push(q as u32);
+        acc += q;
+    }
+    let target: i64 = 65536;
+    let delta = target - acc;
+    if delta != 0 {
+        let mid = weights.len() / 2;
+        let mid_val = i64::from(weights[mid]);
+        let new_mid = (mid_val + delta).clamp(0, 65536);
+        weights[mid] = new_mid as u32;
+    }
+
+    Ok(weights)
+}
+
+fn blur_rgba8_premul_q16(
+    src: &[u8],
+    dst: &mut [u8],
+    tmp: &mut [u8],
+    width: u32,
+    height: u32,
+    kernel_q16: &[u32],
+) {
+    if kernel_q16.len() == 1 {
+        dst.copy_from_slice(src);
+        return;
+    }
+
+    horizontal_blur_q16(src, tmp, width, height, kernel_q16);
+    vertical_blur_q16(tmp, dst, width, height, kernel_q16);
+}
+
+fn horizontal_blur_q16(src: &[u8], dst: &mut [u8], width: u32, height: u32, k: &[u32]) {
+    let radius = (k.len() / 2) as i32;
+    let w = width as i32;
+    for y in 0..height as i32 {
+        for x in 0..w {
+            let mut acc = [0u64; 4];
+            for (ki, &kw) in k.iter().enumerate() {
+                let dx = ki as i32 - radius;
+                let sx = (x + dx).clamp(0, w - 1);
+                let idx = ((y * w + sx) as usize) * 4;
+                for c in 0..4 {
+                    acc[c] += (kw as u64) * (src[idx + c] as u64);
+                }
+            }
+            let out_idx = ((y * w + x) as usize) * 4;
+            for c in 0..4 {
+                dst[out_idx + c] = q16_to_u8(acc[c]);
+            }
+        }
+    }
+}
+
+fn vertical_blur_q16(src: &[u8], dst: &mut [u8], width: u32, height: u32, k: &[u32]) {
+    let radius = (k.len() / 2) as i32;
+    let w = width as i32;
+    let h = height as i32;
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0u64; 4];
+            for (ki, &kw) in k.iter().enumerate() {
+                let dy = ki as i32 - radius;
+                let sy = (y + dy).clamp(0, h - 1);
+                let idx = ((sy * w + x) as usize) * 4;
+                for c in 0..4 {
+                    acc[c] += (kw as u64) * (src[idx + c] as u64);
+                }
+            }
+            let out_idx = ((y * w + x) as usize) * 4;
+            for c in 0..4 {
+                dst[out_idx + c] = q16_to_u8(acc[c]);
+            }
+        }
+    }
+}
+
+fn q16_to_u8(acc: u64) -> u8 {
+    let v = (acc + 32768) >> 16;
+    (v.min(255)) as u8
+}
+
 fn premul_over_in_place(dst: &mut [u8], src: &[u8]) -> WavyteResult<()> {
     if dst.len() != src.len() || !dst.len().is_multiple_of(4) {
         return Err(WavyteError::evaluation(
@@ -1215,5 +1417,35 @@ mod tests {
         assert_eq!(frame.width, 64);
         assert_eq!(frame.height, 64);
         assert!(frame.data.iter().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn blur_radius_0_is_identity() {
+        let w = 4u32;
+        let h = 3u32;
+        let mut src = vec![0u8; (w as usize) * (h as usize) * 4];
+        for (i, b) in src.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(31);
+        }
+        let mut dst = vec![0u8; src.len()];
+        let mut tmp = vec![0u8; src.len()];
+        let k = gaussian_kernel_q16(0, 1.0).unwrap();
+        blur_rgba8_premul_q16(&src, &mut dst, &mut tmp, w, h, &k);
+        assert_eq!(src, dst);
+    }
+
+    #[test]
+    fn blur_constant_image_is_identity() {
+        let w = 5u32;
+        let h = 5u32;
+        let mut src = vec![0u8; (w as usize) * (h as usize) * 4];
+        for px in src.chunks_exact_mut(4) {
+            px.copy_from_slice(&[10, 20, 30, 40]);
+        }
+        let mut dst = vec![0u8; src.len()];
+        let mut tmp = vec![0u8; src.len()];
+        let k = gaussian_kernel_q16(2, 1.0).unwrap();
+        blur_rgba8_premul_q16(&src, &mut dst, &mut tmp, w, h, &k);
+        assert_eq!(src, dst);
     }
 }

@@ -284,7 +284,7 @@ Goal: pooled execution of DAG plan with parallel scheduling and correct kernels.
 - Keep caches out of hot path except bounded first-use caches.
 - Validation: canonical verify command set.
 
-- [ ] Commit 6.4: Implement blur kernel (pooled scratch)
+- [x] Commit 6.4: Implement blur kernel (pooled scratch)
 - Separable gaussian; test endpoints and invariants.
 - Validation: canonical verify command set.
 
