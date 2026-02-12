@@ -1,6 +1,7 @@
 use crate::foundation::core::Rgba8Premul;
 use crate::foundation::core::{Canvas, Fps};
 use crate::v03::animation::anim::Anim;
+use crate::v03::animation::anim::InterpMode;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx, VarId};
 use crate::v03::normalize::intern::{InternId, StringInterner};
 use serde_json::Value as JsonValue;
@@ -206,7 +207,7 @@ pub(crate) enum MaskModeIR {
 pub(crate) struct TransitionSpecIR {
     pub(crate) kind: InternId,
     pub(crate) duration_frames: u32,
-    pub(crate) ease: Option<InternId>,
+    pub(crate) ease: InterpMode,
     pub(crate) params: Vec<(InternId, JsonValue)>,
 }
 

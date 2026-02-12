@@ -302,14 +302,38 @@ fn normalize_kind_and_props(
             let mode_ir = match mode {
                 CollectionModeDef::Group => CollectionModeIR::Group,
                 CollectionModeDef::Sequence => {
-                    let mut prefix = Vec::with_capacity(child_idxs.len() + 1);
-                    prefix.push(0);
-                    let mut acc = 0u64;
-                    for child in children {
-                        let dur = child.range[1];
-                        acc = acc.saturating_add(dur);
-                        prefix.push(acc);
+                    fn overlap_between(a: &NodeDef, b: &NodeDef) -> u64 {
+                        let dur_a = a.range[1].saturating_sub(a.range[0]);
+                        let dur_b = b.range[1].saturating_sub(b.range[0]);
+
+                        let overlap = match (a.transition_out.as_ref(), b.transition_in.as_ref()) {
+                            (Some(ta), Some(tb))
+                                if ta.kind == tb.kind
+                                    && ta.duration_frames == tb.duration_frames
+                                    && ta.duration_frames > 0 =>
+                            {
+                                ta.duration_frames as u64
+                            }
+                            (Some(ta), None) if ta.duration_frames > 0 => ta.duration_frames as u64,
+                            (None, Some(tb)) if tb.duration_frames > 0 => tb.duration_frames as u64,
+                            _ => 0,
+                        };
+
+                        overlap.min(dur_a).min(dur_b)
                     }
+
+                    let mut prefix = Vec::with_capacity(child_idxs.len() + 1);
+                    let mut acc = 0u64;
+                    for (i, child) in children.iter().enumerate() {
+                        prefix.push(acc);
+                        let dur = child.range[1].saturating_sub(child.range[0]);
+                        acc = acc.saturating_add(dur);
+                        if let Some(next) = children.get(i + 1) {
+                            let ov = overlap_between(child, next);
+                            acc = acc.saturating_sub(ov);
+                        }
+                    }
+                    prefix.push(acc);
                     sequence_prefix_starts = Some(prefix);
                     CollectionModeIR::Sequence
                 }
@@ -352,7 +376,17 @@ fn normalize_effect(e: &EffectInstanceDef, interner: &mut StringInterner) -> Eff
 
 fn normalize_transition(t: &TransitionSpecDef, interner: &mut StringInterner) -> TransitionSpecIR {
     let kind = interner.intern(&t.kind);
-    let ease = t.ease.as_ref().map(|e| interner.intern(e));
+    let ease = match t.ease.as_deref() {
+        None => InterpMode::Linear,
+        Some("hold") => InterpMode::Hold,
+        Some("linear") => InterpMode::Linear,
+        Some("ease_in") => InterpMode::EaseIn,
+        Some("ease_out") => InterpMode::EaseOut,
+        Some("ease_in_out") => InterpMode::EaseInOut,
+        Some("elastic_out") => InterpMode::ElasticOut,
+        Some("bounce_out") => InterpMode::BounceOut,
+        Some(_other) => InterpMode::Linear,
+    };
     let params = t
         .params
         .iter()

@@ -181,7 +181,7 @@ Goal: allocation-free steady-state evaluation producing `EvaluatedGraph` + `Rend
 - Build `units: Vec<RenderUnit>` in painter order.
 - Validation: canonical verify command set.
 
-- [ ] Commit 3.6: Transition resolution model
+- [x] Commit 3.6: Transition resolution model
 - Implement `TransitionBinding` and `ResolvedTransition`.
 - Implement `transition_in/out` progress and easing.
 - Implement `Sequence` overlap window evaluation behavior.

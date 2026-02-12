@@ -8,7 +8,10 @@ use crate::v03::eval::visibility::{VisibilityState, compute_visibility};
 use crate::v03::expression::program::ExprProgram;
 use crate::v03::expression::vm::VmError;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx};
-use crate::v03::normalize::ir::{CollectionModeIR, CompositionIR, NodeIR, NodeKindIR, NodePropsIR};
+use crate::v03::normalize::intern::InternId;
+use crate::v03::normalize::ir::{
+    CollectionModeIR, CompositionIR, NodeIR, NodeKindIR, NodePropsIR, TransitionSpecIR,
+};
 use crate::v03::normalize::property::PropertyKey;
 use smallvec::SmallVec;
 use std::ops::Range;
@@ -46,6 +49,14 @@ pub(crate) enum RenderUnitKind {
 pub(crate) struct RenderUnit {
     pub(crate) kind: RenderUnitKind,
     pub(crate) leaf_range: Range<usize>,
+    pub(crate) transition_in: Option<ResolvedTransition>,
+    pub(crate) transition_out: Option<ResolvedTransition>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ResolvedTransition {
+    pub(crate) kind: InternId,
+    pub(crate) progress: f32, // eased, in [0, 1]
 }
 
 #[derive(Debug)]
@@ -163,9 +174,14 @@ impl Evaluator {
                         debug_assert_eq!(popped_iso, Some(frame.idx));
 
                         if self.isolated_group_stack.is_empty() {
+                            let node_ir = &ir.nodes[frame.idx.0 as usize];
+                            let t = self.time_ctxs[frame.idx.0 as usize];
+                            let (tin, tout) = resolve_transitions(node_ir, t);
                             self.graph.units.push(RenderUnit {
                                 kind: RenderUnitKind::Group(frame.idx),
                                 leaf_range: frame.start_leaf..end_leaf,
+                                transition_in: tin,
+                                transition_out: tout,
                             });
                         }
                     }
@@ -207,9 +223,12 @@ impl Evaluator {
                             });
 
                             if self.isolated_group_stack.is_empty() {
+                                let (tin, tout) = resolve_transitions(node, t);
                                 self.graph.units.push(RenderUnit {
                                     kind: RenderUnitKind::Leaf(idx),
                                     leaf_range: leaf_i..(leaf_i + 1),
+                                    transition_in: tin,
+                                    transition_out: tout,
                                 });
                             }
                         }
@@ -273,6 +292,87 @@ fn group_requires_isolation(node: &NodeIR) -> bool {
         || !node.effects.is_empty()
         || node.transition_in.is_some()
         || node.transition_out.is_some()
+}
+
+fn resolve_transitions(
+    node: &NodeIR,
+    t: NodeTimeCtx,
+) -> (Option<ResolvedTransition>, Option<ResolvedTransition>) {
+    let local = t.sample_frame_u64();
+    let dur = t.duration_frames_u64();
+
+    let tin = node
+        .transition_in
+        .as_ref()
+        .and_then(|spec| resolve_transition_in(spec, local, dur));
+    let tout = node
+        .transition_out
+        .as_ref()
+        .and_then(|spec| resolve_transition_out(spec, local, dur));
+
+    (tin, tout)
+}
+
+fn resolve_transition_in(
+    spec: &TransitionSpecIR,
+    local_frame: u64,
+    node_dur_frames: u64,
+) -> Option<ResolvedTransition> {
+    if node_dur_frames == 0 {
+        return None;
+    }
+    let d = (spec.duration_frames as u64).min(node_dur_frames);
+    if d == 0 {
+        return None;
+    }
+    if local_frame >= d {
+        return None;
+    }
+
+    let denom = d.saturating_sub(1);
+    let t = if denom == 0 {
+        1.0
+    } else {
+        (local_frame as f64) / (denom as f64)
+    };
+    let p = spec.ease.apply(t).clamp(0.0, 1.0);
+
+    Some(ResolvedTransition {
+        kind: spec.kind,
+        progress: p as f32,
+    })
+}
+
+fn resolve_transition_out(
+    spec: &TransitionSpecIR,
+    local_frame: u64,
+    node_dur_frames: u64,
+) -> Option<ResolvedTransition> {
+    if node_dur_frames == 0 {
+        return None;
+    }
+    let d = (spec.duration_frames as u64).min(node_dur_frames);
+    if d == 0 {
+        return None;
+    }
+    let start = node_dur_frames.saturating_sub(d);
+    if local_frame < start {
+        return None;
+    }
+
+    let offset = local_frame - start;
+    let denom = d.saturating_sub(1);
+    let t = if denom == 0 {
+        1.0
+    } else {
+        (offset as f64) / (denom as f64)
+    };
+    let p = spec.ease.apply(t).clamp(0.0, 1.0);
+
+    Some(ResolvedTransition {
+        kind: spec.kind,
+        progress: p as f32,
+    })
 }
 
 fn sample_local_transform_and_opacity(
@@ -433,7 +533,7 @@ mod tests {
     use crate::v03::normalize::pass::normalize;
     use crate::v03::scene::model::{
         AssetDef, CanvasDef, CollectionModeDef, CompositionDef, EffectInstanceDef, FpsDef, NodeDef,
-        NodeKindDef,
+        NodeKindDef, TransitionSpecDef,
     };
     use std::collections::BTreeMap;
 
@@ -595,5 +695,95 @@ mod tests {
         assert_eq!(g.groups.len(), 1);
         assert_eq!(g.units.len(), 1);
         assert!(matches!(g.units[0].kind, RenderUnitKind::Group(_)));
+    }
+
+    #[test]
+    fn sequence_overlap_emits_both_children_in_overlap_window() {
+        let mut assets = BTreeMap::new();
+        assets.insert("a".to_owned(), AssetDef::Null);
+
+        let a = NodeDef {
+            id: "a".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: Some(TransitionSpecDef {
+                kind: "fade".to_owned(),
+                duration_frames: 3,
+                ease: None,
+                params: BTreeMap::new(),
+            }),
+        };
+
+        let b = NodeDef {
+            id: "b".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            effects: vec![],
+            mask: None,
+            transition_in: Some(TransitionSpecDef {
+                kind: "fade".to_owned(),
+                duration_frames: 3,
+                ease: None,
+                params: BTreeMap::new(),
+            }),
+            transition_out: None,
+        };
+
+        // Total duration is 10 + 10 - 3 = 17.
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 1,
+                height: 1,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 17,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Sequence,
+                    children: vec![a, b],
+                },
+                range: [0, 17],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let program = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(program);
+
+        let g6 = eval.eval_frame(&norm.ir, 6).unwrap();
+        assert_eq!(g6.leaves.len(), 1);
+        assert_eq!(g6.units.len(), 1);
+
+        let g7 = eval.eval_frame(&norm.ir, 7).unwrap();
+        assert_eq!(g7.leaves.len(), 2);
+        assert_eq!(g7.units.len(), 2);
+
+        // In the overlap window, one child has `transition_out` and the other has `transition_in`.
+        assert!(
+            g7.units.iter().any(|u| u.transition_out.is_some())
+                && g7.units.iter().any(|u| u.transition_in.is_some())
+        );
     }
 }

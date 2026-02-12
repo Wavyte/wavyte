@@ -1,5 +1,5 @@
 use crate::v03::scene::model::{
-    CollectionModeDef, CompositionDef, MaskSourceDef, NodeDef, NodeKindDef,
+    CollectionModeDef, CompositionDef, MaskSourceDef, NodeDef, NodeKindDef, TransitionSpecDef,
 };
 use crate::v03::schema::version::V03_VERSION_STR;
 use std::collections::HashSet;
@@ -195,6 +195,22 @@ fn validate_refs(
     def: &CompositionDef,
     errors: &mut Vec<SchemaError>,
 ) {
+    // Transition ease names (static set in v0.3 boundary model).
+    if let Some(t) = node.transition_in.as_ref() {
+        validate_transition_spec(
+            t,
+            [path.as_slice(), &[SchemaPathElem::Field("transition_in")]].concat(),
+            errors,
+        );
+    }
+    if let Some(t) = node.transition_out.as_ref() {
+        validate_transition_spec(
+            t,
+            [path.as_slice(), &[SchemaPathElem::Field("transition_out")]].concat(),
+            errors,
+        );
+    }
+
     // Leaf asset refs.
     if let NodeKindDef::Leaf { asset } = &node.kind
         && !def.assets.contains_key(asset)
@@ -303,6 +319,38 @@ fn validate_refs(
             path.pop();
             path.pop();
             path.pop();
+        }
+    }
+}
+
+fn validate_transition_spec(
+    t: &TransitionSpecDef,
+    base_path: Vec<SchemaPathElem>,
+    errors: &mut Vec<SchemaError>,
+) {
+    if t.kind.trim().is_empty() {
+        errors.push(SchemaError::at(
+            &[base_path.as_slice(), &[SchemaPathElem::Field("kind")]].concat(),
+            "transition kind must be non-empty",
+        ));
+    }
+
+    if let Some(e) = t.ease.as_deref() {
+        let ok = matches!(
+            e,
+            "hold"
+                | "linear"
+                | "ease_in"
+                | "ease_out"
+                | "ease_in_out"
+                | "elastic_out"
+                | "bounce_out"
+        );
+        if !ok {
+            errors.push(SchemaError::at(
+                &[base_path.as_slice(), &[SchemaPathElem::Field("ease")]].concat(),
+                format!("unknown transition ease \"{e}\""),
+            ));
         }
     }
 }
