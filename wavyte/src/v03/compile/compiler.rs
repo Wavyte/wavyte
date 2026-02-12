@@ -162,11 +162,13 @@ pub(crate) fn compile_frame(ir: &CompositionIR, eval: &EvaluatedGraph) -> Render
         i += 1;
     }
 
-    RenderPlan {
+    let mut plan = RenderPlan {
         surfaces,
         ops,
         roots: smallvec![root],
-    }
+    };
+    crate::v03::compile::fuse::fuse_plan(&mut plan);
+    plan
 }
 
 fn unit_transition_opacity(unit: &crate::v03::eval::evaluator::RenderUnit) -> f32 {

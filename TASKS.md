@@ -250,7 +250,7 @@ Goal: deterministic DAG plan, surface lifetimes, fusion and stable fingerprintin
 - Add determinism tests for paired vs unpaired behavior.
 - Validation: canonical verify command set.
 
-- [ ] Commit 5.5: Implement fusion rules
+- [x] Commit 5.5: Implement fusion rules
 - Inline affine/opacity folding.
 - Color matrix folding (single matrix pass).
 - Identity elimination (blur radius 0, identity matrix, no-op masks).
