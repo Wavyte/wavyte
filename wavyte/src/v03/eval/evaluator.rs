@@ -8,7 +8,7 @@ use crate::v03::eval::visibility::{VisibilityState, compute_visibility};
 use crate::v03::expression::program::ExprProgram;
 use crate::v03::expression::vm::VmError;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx};
-use crate::v03::normalize::ir::{CollectionModeIR, CompositionIR, NodeKindIR, NodePropsIR};
+use crate::v03::normalize::ir::{CollectionModeIR, CompositionIR, NodeIR, NodeKindIR, NodePropsIR};
 use crate::v03::normalize::property::PropertyKey;
 use smallvec::SmallVec;
 use std::ops::Range;
@@ -60,6 +60,15 @@ pub(crate) struct Evaluator {
     graph: EvaluatedGraph,
 
     group_stack: Vec<NodeIdx>,
+    group_frames: Vec<GroupFrame>,
+    isolated_group_stack: Vec<NodeIdx>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GroupFrame {
+    idx: NodeIdx,
+    start_leaf: usize,
+    isolate: bool,
 }
 
 impl Evaluator {
@@ -78,6 +87,8 @@ impl Evaluator {
                 units: Vec::new(),
             },
             group_stack: Vec::with_capacity(8),
+            group_frames: Vec::with_capacity(8),
+            isolated_group_stack: Vec::with_capacity(4),
         }
     }
 
@@ -103,6 +114,8 @@ impl Evaluator {
         self.graph.groups.clear();
         self.graph.units.clear();
         self.group_stack.clear();
+        self.group_frames.clear();
+        self.isolated_group_stack.clear();
 
         self.dfs_emit_leaves(ir)?;
 
@@ -132,7 +145,30 @@ impl Evaluator {
         while let Some(w) = stack.pop() {
             match w {
                 Work::ExitGroup { idx: _ } => {
-                    self.group_stack.pop();
+                    let frame = self
+                        .group_frames
+                        .pop()
+                        .ok_or_else(|| VmError::new("group frame underflow"))?;
+                    let popped = self.group_stack.pop();
+                    debug_assert_eq!(popped, Some(frame.idx));
+
+                    if frame.isolate {
+                        let end_leaf = self.graph.leaves.len();
+                        self.graph.groups.push(EvaluatedGroup {
+                            node: frame.idx,
+                            leaf_range: frame.start_leaf..end_leaf,
+                        });
+
+                        let popped_iso = self.isolated_group_stack.pop();
+                        debug_assert_eq!(popped_iso, Some(frame.idx));
+
+                        if self.isolated_group_stack.is_empty() {
+                            self.graph.units.push(RenderUnit {
+                                kind: RenderUnitKind::Group(frame.idx),
+                                leaf_range: frame.start_leaf..end_leaf,
+                            });
+                        }
+                    }
                 }
                 Work::Enter {
                     idx,
@@ -159,6 +195,7 @@ impl Evaluator {
 
                     match &node.kind {
                         NodeKindIR::Leaf { asset } => {
+                            let leaf_i = self.graph.leaves.len();
                             let mut gs: SmallVec<[NodeIdx; 4]> = SmallVec::new();
                             gs.extend(self.group_stack.iter().copied());
                             self.graph.leaves.push(EvaluatedLeaf {
@@ -168,6 +205,13 @@ impl Evaluator {
                                 opacity: opacity as f32,
                                 group_stack: gs,
                             });
+
+                            if self.isolated_group_stack.is_empty() {
+                                self.graph.units.push(RenderUnit {
+                                    kind: RenderUnitKind::Leaf(idx),
+                                    leaf_range: leaf_i..(leaf_i + 1),
+                                });
+                            }
                         }
                         NodeKindIR::CompRef { .. } => {
                             return Err(VmError::new(
@@ -176,7 +220,17 @@ impl Evaluator {
                         }
                         NodeKindIR::Collection { mode, children, .. } => {
                             if matches!(mode, CollectionModeIR::Group) {
+                                let isolate = group_requires_isolation(node);
+                                let start_leaf = self.graph.leaves.len();
                                 self.group_stack.push(idx);
+                                self.group_frames.push(GroupFrame {
+                                    idx,
+                                    start_leaf,
+                                    isolate,
+                                });
+                                if isolate {
+                                    self.isolated_group_stack.push(idx);
+                                }
                                 stack.push(Work::ExitGroup { idx });
                             }
 
@@ -212,6 +266,13 @@ impl Evaluator {
 
         Ok(())
     }
+}
+
+fn group_requires_isolation(node: &NodeIR) -> bool {
+    node.mask.is_some()
+        || !node.effects.is_empty()
+        || node.transition_in.is_some()
+        || node.transition_out.is_some()
 }
 
 fn sample_local_transform_and_opacity(
@@ -371,7 +432,8 @@ mod tests {
     use crate::v03::expression::compile::compile_expr_program;
     use crate::v03::normalize::pass::normalize;
     use crate::v03::scene::model::{
-        AssetDef, CanvasDef, CollectionModeDef, CompositionDef, FpsDef, NodeDef, NodeKindDef,
+        AssetDef, CanvasDef, CollectionModeDef, CompositionDef, EffectInstanceDef, FpsDef, NodeDef,
+        NodeKindDef,
     };
     use std::collections::BTreeMap;
 
@@ -441,5 +503,97 @@ mod tests {
         let mut eval = Evaluator::new(program);
         let g = eval.eval_frame(&norm.ir, 0).unwrap();
         assert_eq!(g.leaves.len(), 1);
+    }
+
+    #[test]
+    fn group_effect_triggers_isolated_group_unit_and_suppresses_leaf_units() {
+        let mut assets = BTreeMap::new();
+        assets.insert("a".to_owned(), AssetDef::Null);
+
+        let child0 = NodeDef {
+            id: "c0".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+        let child1 = NodeDef {
+            id: "c1".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+
+        let group = NodeDef {
+            id: "g".to_owned(),
+            kind: NodeKindDef::Collection {
+                mode: CollectionModeDef::Group,
+                children: vec![child0, child1],
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            effects: vec![EffectInstanceDef {
+                kind: "blur".to_owned(),
+                params: {
+                    let mut m = BTreeMap::new();
+                    m.insert("radius".to_owned(), serde_json::json!(3));
+                    m
+                },
+            }],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 1,
+                height: 1,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 10,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Group,
+                    children: vec![group],
+                },
+                range: [0, 10],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let program = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(program);
+        let g = eval.eval_frame(&norm.ir, 0).unwrap();
+
+        assert_eq!(g.leaves.len(), 2);
+        assert_eq!(g.groups.len(), 1);
+        assert_eq!(g.units.len(), 1);
+        assert!(matches!(g.units[0].kind, RenderUnitKind::Group(_)));
     }
 }

@@ -175,7 +175,7 @@ Goal: allocation-free steady-state evaluation producing `EvaluatedGraph` + `Rend
 - Preallocate and reuse vectors per frame (no allocations after warmup).
 - Validation: canonical verify command set.
 
-- [ ] Commit 3.5: Group isolation tagging + `RenderUnit` emission
+- [x] Commit 3.5: Group isolation tagging + `RenderUnit` emission
 - Implement rules:
   - isolate only if mask/pass effects/transition requires isolation
 - Build `units: Vec<RenderUnit>` in painter order.
