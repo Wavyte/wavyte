@@ -141,11 +141,17 @@ impl Evaluator {
         self.layout
             .ensure_tree(ir)
             .map_err(|e| VmError::new(e.to_string()))?;
-        self.layout
-            .update_styles_for_frame(ir, &self.time_ctxs, Some(&self.props))?;
-        self.layout
-            .compute_layout_canvas(ir.canvas.width as f32, ir.canvas.height as f32)
-            .map_err(|e| VmError::new(e.to_string()))?;
+        let layout_dirty = self.layout.update_styles_for_frame(
+            ir,
+            &self.time_ctxs,
+            Some(&self.props),
+            &self.vis.node_visible,
+        )?;
+        if layout_dirty {
+            self.layout
+                .compute_layout_canvas(ir.canvas.width as f32, ir.canvas.height as f32)
+                .map_err(|e| VmError::new(e.to_string()))?;
+        }
 
         self.graph.frame = global_frame;
         self.graph.leaves.clear();

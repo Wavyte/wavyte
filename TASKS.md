@@ -217,7 +217,7 @@ Goal: cached Taffy tree with lane-typed style updates and deterministic rect inj
   - video (static dimensions)
 - Validation: canonical verify command set.
 
-- [ ] Commit 4.4: Layout caching and dirty rules
+- [x] Commit 4.4: Layout caching and dirty rules
 - Implement “dirty” sources and skip layout solve when not needed.
 - Ensure invisible nodes do not influence layout.
 - Validation: canonical verify command set.

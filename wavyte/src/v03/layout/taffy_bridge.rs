@@ -2,6 +2,7 @@ use crate::foundation::math::Fnv1a64;
 use crate::v03::animation::anim::{Anim, SampleCtx};
 use crate::v03::foundation::ids::NodeIdx;
 use crate::v03::layout::RectPx;
+use crate::v03::layout::cache::LayoutCache;
 use crate::v03::normalize::ir::{AssetIR, CompositionIR, NodeKindIR};
 use crate::v03::normalize::property::PropertyKey;
 use crate::v03::{
@@ -31,6 +32,7 @@ pub(crate) struct TaffyBridge {
     pub(crate) taffy_root: Option<NodeId>,
     pub(crate) layout_rects: Vec<RectPx>,
     built_for_nodes_len: usize,
+    cache: LayoutCache,
 }
 
 impl Default for TaffyBridge {
@@ -47,6 +49,7 @@ impl TaffyBridge {
             taffy_root: None,
             layout_rects: Vec::new(),
             built_for_nodes_len: 0,
+            cache: LayoutCache::default(),
         }
     }
 
@@ -64,6 +67,7 @@ impl TaffyBridge {
         self.layout_rects.clear();
         self.layout_rects.resize(ir.nodes.len(), RectPx::default());
         self.built_for_nodes_len = ir.nodes.len();
+        self.cache.reset(ir.nodes.len());
 
         // Build a minimal tree containing only nodes that opt into layout.
         let root = self.build_subtree(ir, ir.root, None)?;
@@ -116,7 +120,10 @@ impl TaffyBridge {
         ir: &CompositionIR,
         time_ctxs: &[NodeTimeCtx],
         props: Option<&PropertyValues>,
-    ) -> Result<(), crate::v03::expression::vm::VmError> {
+        node_visible: &[bool],
+    ) -> Result<bool, crate::v03::expression::vm::VmError> {
+        self.cache.ensure_len(ir.nodes.len());
+        let mut dirty = false;
         for (i, maybe) in self.node_to_taffy.iter().enumerate() {
             let Some(nid) = maybe else {
                 continue;
@@ -125,6 +132,7 @@ impl TaffyBridge {
             let Some(lp) = ir.nodes.get(i).and_then(|n| n.layout.as_ref()) else {
                 continue;
             };
+            let visible = node_visible.get(i).copied().unwrap_or(false);
 
             let t = time_ctxs
                 .get(i)
@@ -132,12 +140,25 @@ impl TaffyBridge {
                 .ok_or_else(|| crate::v03::expression::vm::VmError::new("layout time ctx OOB"))?;
             let frame = t.sample_frame_u64();
 
-            let style = style_for_node(ir, idx, lp, frame, props)?;
-            self.taffy
-                .set_style(*nid, style)
-                .map_err(|e| crate::v03::expression::vm::VmError::new(e.to_string()))?;
+            let (style, hash) = style_for_node_and_hash(ir, idx, lp, frame, props, visible)?;
+            if self
+                .cache
+                .style_hash_by_node
+                .get(i)
+                .copied()
+                .unwrap_or(u64::MAX)
+                != hash
+            {
+                dirty = true;
+                if let Some(slot) = self.cache.style_hash_by_node.get_mut(i) {
+                    *slot = hash;
+                }
+                self.taffy
+                    .set_style(*nid, style)
+                    .map_err(|e| crate::v03::expression::vm::VmError::new(e.to_string()))?;
+            }
         }
-        Ok(())
+        Ok(dirty)
     }
 
     fn build_subtree(
@@ -224,62 +245,73 @@ fn intrinsic_size_for_node(ir: &CompositionIR, idx: NodeIdx) -> Size<f32> {
     }
 }
 
-fn style_for_node(
+fn style_for_node_and_hash(
     ir: &CompositionIR,
     node: NodeIdx,
     lp: &LayoutPropsIR,
     frame: u64,
     props: Option<&PropertyValues>,
-) -> Result<Style, crate::v03::expression::vm::VmError> {
-    let display = match lp.display {
-        crate::v03::normalize::ir::LayoutDisplayIR::None => Display::None,
-        crate::v03::normalize::ir::LayoutDisplayIR::Flex => Display::Flex,
-        crate::v03::normalize::ir::LayoutDisplayIR::Grid => Display::Grid,
+    visible: bool,
+) -> Result<(Style, u64), crate::v03::expression::vm::VmError> {
+    let (display_tag, display) = if !visible {
+        (0u8, Display::None)
+    } else {
+        match lp.display {
+            crate::v03::normalize::ir::LayoutDisplayIR::None => (0u8, Display::None),
+            crate::v03::normalize::ir::LayoutDisplayIR::Flex => (1u8, Display::Flex),
+            crate::v03::normalize::ir::LayoutDisplayIR::Grid => (2u8, Display::Grid),
+        }
     };
 
-    let position = match lp.position {
-        crate::v03::normalize::ir::LayoutPositionIR::Relative => Position::Relative,
-        crate::v03::normalize::ir::LayoutPositionIR::Absolute => Position::Absolute,
+    let (position_tag, position) = match lp.position {
+        crate::v03::normalize::ir::LayoutPositionIR::Relative => (0u8, Position::Relative),
+        crate::v03::normalize::ir::LayoutPositionIR::Absolute => (1u8, Position::Absolute),
     };
 
-    let flex_direction = match lp.direction {
-        crate::v03::normalize::ir::LayoutDirectionIR::Row => FlexDirection::Row,
-        crate::v03::normalize::ir::LayoutDirectionIR::Column => FlexDirection::Column,
+    let (flex_direction_tag, flex_direction) = match lp.direction {
+        crate::v03::normalize::ir::LayoutDirectionIR::Row => (0u8, FlexDirection::Row),
+        crate::v03::normalize::ir::LayoutDirectionIR::Column => (1u8, FlexDirection::Column),
     };
-    let flex_wrap = match lp.wrap {
-        crate::v03::normalize::ir::LayoutWrapIR::NoWrap => FlexWrap::NoWrap,
-        crate::v03::normalize::ir::LayoutWrapIR::Wrap => FlexWrap::Wrap,
+    let (flex_wrap_tag, flex_wrap) = match lp.wrap {
+        crate::v03::normalize::ir::LayoutWrapIR::NoWrap => (0u8, FlexWrap::NoWrap),
+        crate::v03::normalize::ir::LayoutWrapIR::Wrap => (1u8, FlexWrap::Wrap),
     };
 
-    let justify_content = Some(match lp.justify_content {
-        crate::v03::normalize::ir::LayoutJustifyContentIR::Start => JustifyContent::Start,
-        crate::v03::normalize::ir::LayoutJustifyContentIR::End => JustifyContent::End,
-        crate::v03::normalize::ir::LayoutJustifyContentIR::Center => JustifyContent::Center,
+    let (justify_tag, justify_content) = match lp.justify_content {
+        crate::v03::normalize::ir::LayoutJustifyContentIR::Start => (0u8, JustifyContent::Start),
+        crate::v03::normalize::ir::LayoutJustifyContentIR::End => (1u8, JustifyContent::End),
+        crate::v03::normalize::ir::LayoutJustifyContentIR::Center => (2u8, JustifyContent::Center),
         crate::v03::normalize::ir::LayoutJustifyContentIR::SpaceBetween => {
-            JustifyContent::SpaceBetween
+            (3u8, JustifyContent::SpaceBetween)
         }
         crate::v03::normalize::ir::LayoutJustifyContentIR::SpaceAround => {
-            JustifyContent::SpaceAround
+            (4u8, JustifyContent::SpaceAround)
         }
         crate::v03::normalize::ir::LayoutJustifyContentIR::SpaceEvenly => {
-            JustifyContent::SpaceEvenly
+            (5u8, JustifyContent::SpaceEvenly)
         }
-    });
-    let align_items = Some(match lp.align_items {
-        crate::v03::normalize::ir::LayoutAlignItemsIR::Start => AlignItems::Start,
-        crate::v03::normalize::ir::LayoutAlignItemsIR::End => AlignItems::End,
-        crate::v03::normalize::ir::LayoutAlignItemsIR::Center => AlignItems::Center,
-        crate::v03::normalize::ir::LayoutAlignItemsIR::Stretch => AlignItems::Stretch,
-    });
-    let align_content = Some(match lp.align_content {
-        crate::v03::normalize::ir::LayoutAlignContentIR::Start => AlignContent::Start,
-        crate::v03::normalize::ir::LayoutAlignContentIR::End => AlignContent::End,
-        crate::v03::normalize::ir::LayoutAlignContentIR::Center => AlignContent::Center,
-        crate::v03::normalize::ir::LayoutAlignContentIR::SpaceBetween => AlignContent::SpaceBetween,
-        crate::v03::normalize::ir::LayoutAlignContentIR::SpaceAround => AlignContent::SpaceAround,
-        crate::v03::normalize::ir::LayoutAlignContentIR::SpaceEvenly => AlignContent::SpaceEvenly,
-        crate::v03::normalize::ir::LayoutAlignContentIR::Stretch => AlignContent::Stretch,
-    });
+    };
+    let (align_items_tag, align_items) = match lp.align_items {
+        crate::v03::normalize::ir::LayoutAlignItemsIR::Start => (0u8, AlignItems::Start),
+        crate::v03::normalize::ir::LayoutAlignItemsIR::End => (1u8, AlignItems::End),
+        crate::v03::normalize::ir::LayoutAlignItemsIR::Center => (2u8, AlignItems::Center),
+        crate::v03::normalize::ir::LayoutAlignItemsIR::Stretch => (3u8, AlignItems::Stretch),
+    };
+    let (align_content_tag, align_content) = match lp.align_content {
+        crate::v03::normalize::ir::LayoutAlignContentIR::Start => (0u8, AlignContent::Start),
+        crate::v03::normalize::ir::LayoutAlignContentIR::End => (1u8, AlignContent::End),
+        crate::v03::normalize::ir::LayoutAlignContentIR::Center => (2u8, AlignContent::Center),
+        crate::v03::normalize::ir::LayoutAlignContentIR::SpaceBetween => {
+            (3u8, AlignContent::SpaceBetween)
+        }
+        crate::v03::normalize::ir::LayoutAlignContentIR::SpaceAround => {
+            (4u8, AlignContent::SpaceAround)
+        }
+        crate::v03::normalize::ir::LayoutAlignContentIR::SpaceEvenly => {
+            (5u8, AlignContent::SpaceEvenly)
+        }
+        crate::v03::normalize::ir::LayoutAlignContentIR::Stretch => (6u8, AlignContent::Stretch),
+    };
 
     let gap_x = sample_lane_f64(
         ir,
@@ -399,69 +431,105 @@ fn style_for_node(
     )? as f32)
         .max(0.0);
 
+    let (size_w_tag, size_w) = sample_dimension_tag_and_value(
+        ir,
+        node,
+        &lp.size.width,
+        PropertyKey::LayoutWidthPx,
+        frame,
+        props,
+    )?;
+    let (size_h_tag, size_h) = sample_dimension_tag_and_value(
+        ir,
+        node,
+        &lp.size.height,
+        PropertyKey::LayoutHeightPx,
+        frame,
+        props,
+    )?;
     let size = Size {
-        width: sample_dimension(
-            ir,
-            node,
-            &lp.size.width,
-            PropertyKey::LayoutWidthPx,
-            frame,
-            props,
-        )?,
-        height: sample_dimension(
-            ir,
-            node,
-            &lp.size.height,
-            PropertyKey::LayoutHeightPx,
-            frame,
-            props,
-        )?,
-    };
-    let min_size = Size {
-        width: sample_dimension(
-            ir,
-            node,
-            &lp.min_size.width,
-            PropertyKey::LayoutMinWidthPx,
-            frame,
-            props,
-        )?,
-        height: sample_dimension(
-            ir,
-            node,
-            &lp.min_size.height,
-            PropertyKey::LayoutMinHeightPx,
-            frame,
-            props,
-        )?,
-    };
-    let max_size = Size {
-        width: sample_dimension(
-            ir,
-            node,
-            &lp.max_size.width,
-            PropertyKey::LayoutMaxWidthPx,
-            frame,
-            props,
-        )?,
-        height: sample_dimension(
-            ir,
-            node,
-            &lp.max_size.height,
-            PropertyKey::LayoutMaxHeightPx,
-            frame,
-            props,
-        )?,
+        width: size_w,
+        height: size_h,
     };
 
-    Ok(Style {
+    let (min_w_tag, min_w) = sample_dimension_tag_and_value(
+        ir,
+        node,
+        &lp.min_size.width,
+        PropertyKey::LayoutMinWidthPx,
+        frame,
+        props,
+    )?;
+    let (min_h_tag, min_h) = sample_dimension_tag_and_value(
+        ir,
+        node,
+        &lp.min_size.height,
+        PropertyKey::LayoutMinHeightPx,
+        frame,
+        props,
+    )?;
+    let min_size = Size {
+        width: min_w,
+        height: min_h,
+    };
+
+    let (max_w_tag, max_w) = sample_dimension_tag_and_value(
+        ir,
+        node,
+        &lp.max_size.width,
+        PropertyKey::LayoutMaxWidthPx,
+        frame,
+        props,
+    )?;
+    let (max_h_tag, max_h) = sample_dimension_tag_and_value(
+        ir,
+        node,
+        &lp.max_size.height,
+        PropertyKey::LayoutMaxHeightPx,
+        frame,
+        props,
+    )?;
+    let max_size = Size {
+        width: max_w,
+        height: max_h,
+    };
+
+    let mut hh = Fnv1a64::new(0);
+    hh.write_u64(display_tag as u64);
+    hh.write_u64(position_tag as u64);
+    hh.write_u64(flex_direction_tag as u64);
+    hh.write_u64(flex_wrap_tag as u64);
+    hh.write_u64(justify_tag as u64);
+    hh.write_u64(align_items_tag as u64);
+    hh.write_u64(align_content_tag as u64);
+    hh.write_u64(gap_x.to_bits() as u64);
+    hh.write_u64(gap_y.to_bits() as u64);
+    hh.write_u64(pad_top.to_bits() as u64);
+    hh.write_u64(pad_right.to_bits() as u64);
+    hh.write_u64(pad_bottom.to_bits() as u64);
+    hh.write_u64(pad_left.to_bits() as u64);
+    hh.write_u64(mar_top.to_bits() as u64);
+    hh.write_u64(mar_right.to_bits() as u64);
+    hh.write_u64(mar_bottom.to_bits() as u64);
+    hh.write_u64(mar_left.to_bits() as u64);
+    hh.write_u64(flex_grow.to_bits() as u64);
+    hh.write_u64(flex_shrink.to_bits() as u64);
+    hh.write_u64(size_w_tag);
+    hh.write_u64(size_h_tag);
+    hh.write_u64(min_w_tag);
+    hh.write_u64(min_h_tag);
+    hh.write_u64(max_w_tag);
+    hh.write_u64(max_h_tag);
+    let style_hash = hh.finish();
+
+    let style = Style {
         display,
         position,
         flex_direction,
         flex_wrap,
-        justify_content,
-        align_items,
-        align_content,
+        justify_content: Some(justify_content),
+        align_items: Some(align_items),
+        align_content: Some(align_content),
         gap,
         padding,
         margin,
@@ -471,23 +539,30 @@ fn style_for_node(
         min_size,
         max_size,
         ..Style::default()
-    })
+    };
+
+    Ok((style, style_hash))
 }
 
-fn sample_dimension(
+fn sample_dimension_tag_and_value(
     ir: &CompositionIR,
     node: NodeIdx,
     d: &AnimDimensionIR,
     px_key: PropertyKey,
     frame: u64,
     props: Option<&PropertyValues>,
-) -> Result<Dimension, crate::v03::expression::vm::VmError> {
+) -> Result<(u64, Dimension), crate::v03::expression::vm::VmError> {
     Ok(match d {
-        AnimDimensionIR::Auto => Dimension::auto(),
-        AnimDimensionIR::Percent(p) => Dimension::percent((*p).max(0.0)),
+        AnimDimensionIR::Auto => (0, Dimension::auto()),
+        AnimDimensionIR::Percent(p) => {
+            let pp = (*p).max(0.0);
+            let tag = (1u64 << 32) | (pp.to_bits() as u64);
+            (tag, Dimension::percent(pp))
+        }
         AnimDimensionIR::Px(px) => {
-            let v = sample_lane_f64(ir, node, px_key, px, frame, props)? as f32;
-            Dimension::length(v.max(0.0))
+            let v = (sample_lane_f64(ir, node, px_key, px, frame, props)? as f32).max(0.0);
+            let tag = (2u64 << 32) | (v.to_bits() as u64);
+            (tag, Dimension::length(v))
         }
     })
 }

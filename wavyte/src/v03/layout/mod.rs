@@ -3,6 +3,7 @@
 //! Phase 4 wires this into the evaluator to compute per-frame layout rectangles and inject them
 //! into the world transform chain.
 
+pub(crate) mod cache;
 pub(crate) mod taffy_bridge;
 
 /// Pixel-space rectangle produced by the layout solver.
