@@ -122,7 +122,7 @@ Goal: land the boundary/runtime split and build deterministic `CompositionIR` wi
 
 Goal: compiled, typed, id-addressed expressions with topo evaluation and cycle errors.
 
-Commit 2.1: Expression parser (AST) + golden tests
+- [x] Commit 2.1: Expression parser (AST) + golden tests
 - Implement recursive-descent parser with precedence.
 - Add unit tests for grammar and errors.
 - Validation: canonical verify command set.
