@@ -96,7 +96,7 @@ Goal: land the boundary/runtime split and build deterministic `CompositionIR` wi
 - Implement shorthand deserialization for `Anim<T>` and transforms/effects.
 - Validation: canonical verify command set.
 
-Commit 1.5: Add schema validation skeleton
+- [x] Commit 1.5: Add schema validation skeleton
 - Implement `schema/version.rs` and `schema/validate.rs` with structured errors.
 - Enforce: version == 0.3, unique node ids, asset refs, range validity basics.
 - Validation: canonical verify command set.
