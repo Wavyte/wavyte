@@ -101,7 +101,7 @@ Goal: land the boundary/runtime split and build deterministic `CompositionIR` wi
 - Enforce: version == 0.3, unique node ids, asset refs, range validity basics.
 - Validation: canonical verify command set.
 
-Commit 1.6: Implement normalize pass to `CompositionIR`
+- [x] Commit 1.6: Implement normalize pass to `CompositionIR`
 - Add runtime structs: `CompositionIR`, `NodeIR`, `AssetIR`, `LayoutIR`, `RegistryBindings`.
 - Normalize: intern strings, build node arena, resolve children, resolve asset indices, precompute `Sequence` prefix sums.
 - Ensure no strings are retained in runtime structs used by eval/compile/render (keep interner only in session/debug layer).
