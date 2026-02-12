@@ -435,6 +435,7 @@ impl CpuBackendV03 {
             trim_start_sec,
             trim_end_sec,
             playback_rate,
+            ..
         } = &ir.assets[asset_i]
         else {
             return Err(WavyteError::evaluation("asset is not video"));

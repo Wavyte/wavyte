@@ -589,6 +589,14 @@ pub(crate) enum AssetDef {
         trim_end_sec: Option<f64>,
         #[serde(default = "default_playback_rate")]
         playback_rate: f64,
+        #[serde(default = "default_volume")]
+        volume: f64,
+        #[serde(default)]
+        mute: bool,
+        #[serde(default)]
+        fade_in_sec: f64,
+        #[serde(default)]
+        fade_out_sec: f64,
     },
     Audio {
         source: String,
@@ -598,6 +606,14 @@ pub(crate) enum AssetDef {
         trim_end_sec: Option<f64>,
         #[serde(default = "default_playback_rate")]
         playback_rate: f64,
+        #[serde(default = "default_volume")]
+        volume: f64,
+        #[serde(default)]
+        mute: bool,
+        #[serde(default)]
+        fade_in_sec: f64,
+        #[serde(default)]
+        fade_out_sec: f64,
     },
     SolidRect {
         #[serde(default)]
@@ -615,5 +631,9 @@ pub(crate) enum AssetDef {
 }
 
 fn default_playback_rate() -> f64 {
+    1.0
+}
+
+fn default_volume() -> f64 {
     1.0
 }

@@ -318,7 +318,7 @@ Goal: sink-based streaming and audio mixing outside per-frame loop.
 - Implement flattening fast path and opaque skip path.
 - Validation: canonical verify command set.
 
-- [ ] Commit 7.3: Add audio manifest and mixer modules
+- [x] Commit 7.3: Add audio manifest and mixer modules
 - Add `audio/manifest.rs` and `audio/mix.rs` per spec 15.4.
 - Enforce Switch audio constraint: active must be constant over range (else validation error for audio).
 - Validation: canonical verify command set.

@@ -1,5 +1,6 @@
 use crate::v03::scene::model::{
-    CollectionModeDef, CompositionDef, MaskSourceDef, NodeDef, NodeKindDef, TransitionSpecDef,
+    AssetDef, CollectionModeDef, CompositionDef, MaskSourceDef, NodeDef, NodeKindDef,
+    TransitionSpecDef,
 };
 use crate::v03::schema::version::V03_VERSION_STR;
 use std::collections::HashSet;
@@ -114,11 +115,85 @@ pub(crate) fn validate_composition(def: &CompositionDef) -> Result<(), SchemaErr
         def,
         &mut errors,
     );
+    validate_assets(def, &mut errors);
 
     if errors.is_empty() {
         Ok(())
     } else {
         Err(SchemaErrors { errors })
+    }
+}
+
+fn validate_assets(def: &CompositionDef, errors: &mut Vec<SchemaError>) {
+    for (key, asset) in &def.assets {
+        match asset {
+            AssetDef::Video {
+                trim_start_sec,
+                trim_end_sec,
+                playback_rate,
+                volume,
+                mute: _,
+                fade_in_sec,
+                fade_out_sec,
+                source: _,
+            }
+            | AssetDef::Audio {
+                trim_start_sec,
+                trim_end_sec,
+                playback_rate,
+                volume,
+                mute: _,
+                fade_in_sec,
+                fade_out_sec,
+                source: _,
+            } => {
+                if !trim_start_sec.is_finite() || *trim_start_sec < 0.0 {
+                    errors.push(SchemaError::at(
+                        &[SchemaPathElem::Field("assets")],
+                        format!("asset '{key}': trim_start_sec must be finite and >= 0"),
+                    ));
+                }
+                if let Some(end) = trim_end_sec {
+                    if !end.is_finite() || *end < 0.0 {
+                        errors.push(SchemaError::at(
+                            &[SchemaPathElem::Field("assets")],
+                            format!("asset '{key}': trim_end_sec must be finite and >= 0"),
+                        ));
+                    }
+                    if *end < *trim_start_sec {
+                        errors.push(SchemaError::at(
+                            &[SchemaPathElem::Field("assets")],
+                            format!("asset '{key}': trim_end_sec must be >= trim_start_sec"),
+                        ));
+                    }
+                }
+                if !playback_rate.is_finite() || *playback_rate <= 0.0 {
+                    errors.push(SchemaError::at(
+                        &[SchemaPathElem::Field("assets")],
+                        format!("asset '{key}': playback_rate must be finite and > 0"),
+                    ));
+                }
+                if !volume.is_finite() || *volume < 0.0 {
+                    errors.push(SchemaError::at(
+                        &[SchemaPathElem::Field("assets")],
+                        format!("asset '{key}': volume must be finite and >= 0"),
+                    ));
+                }
+                if !fade_in_sec.is_finite() || *fade_in_sec < 0.0 {
+                    errors.push(SchemaError::at(
+                        &[SchemaPathElem::Field("assets")],
+                        format!("asset '{key}': fade_in_sec must be finite and >= 0"),
+                    ));
+                }
+                if !fade_out_sec.is_finite() || *fade_out_sec < 0.0 {
+                    errors.push(SchemaError::at(
+                        &[SchemaPathElem::Field("assets")],
+                        format!("asset '{key}': fade_out_sec must be finite and >= 0"),
+                    ));
+                }
+            }
+            _ => {}
+        }
     }
 }
 
