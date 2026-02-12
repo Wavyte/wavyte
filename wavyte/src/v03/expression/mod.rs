@@ -1,8 +1,10 @@
 pub(crate) mod ast;
 pub(crate) mod bind;
 pub(crate) mod bytecode;
+pub(crate) mod compile;
 pub(crate) mod error;
 pub(crate) mod lexer;
 pub(crate) mod lower;
 pub(crate) mod parser;
+pub(crate) mod program;
 pub(crate) mod vm;

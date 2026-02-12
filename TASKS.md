@@ -137,7 +137,7 @@ Goal: compiled, typed, id-addressed expressions with topo evaluation and cycle e
 - Restrict to the v0.3 property ref surface (no deep paths, no effect params, no layout reads).
 - Validation: canonical verify command set.
 
-Commit 2.4: Dependency graph + topo sort + cycle diagnostics
+- [x] Commit 2.4: Dependency graph + topo sort + cycle diagnostics
 - Build edges by scanning bytecode for `LoadProp`.
 - Store `ExprProgram` with `eval_order` and per-property metadata (`owner_node`, `value_type`, `program`).
 - Reject cycles with readable error paths.
