@@ -274,7 +274,7 @@ Goal: pooled execution of DAG plan with parallel scheduling and correct kernels.
 - Expose pool stats for benches/tests.
 - Validation: canonical verify command set.
 
-- [ ] Commit 6.2: DAG scheduler implementation
+- [x] Commit 6.2: DAG scheduler implementation
 - Dependency-count ready queue.
 - Optional parallel op execution when safe.
 - Validation: canonical verify command set.
