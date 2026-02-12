@@ -162,7 +162,7 @@ Goal: allocation-free steady-state evaluation producing `EvaluatedGraph` + `Rend
 - Implement `SampleNodeLane` programs (sampling literal anims for expression dependencies).
 - Validation: canonical verify command set.
 
-- [ ] Commit 3.3: Visibility selection for layout and eval
+- [x] Commit 3.3: Visibility selection for layout and eval
 - Implement per-node visibility flags for current frame:
   - range checks
   - switch active child selection
