@@ -2,6 +2,7 @@ use crate::foundation::core::Rgba8Premul;
 use crate::foundation::core::{Canvas, Fps};
 use crate::v03::animation::anim::Anim;
 use crate::v03::animation::anim::InterpMode;
+use crate::v03::effects::binding::EffectBindingIR;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx, VarId};
 use crate::v03::normalize::intern::{InternId, StringInterner};
 use serde_json::Value as JsonValue;
@@ -49,7 +50,13 @@ pub(crate) struct LayoutIR {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RegistryBindings {
-    // Phase 3/5 bind effect and transition kinds/params to dense IDs.
+    pub(crate) effect_intern_by_id: Vec<InternId>,
+    /// Dense map: `InternId.0 as usize -> Some(EffectKindId)`.
+    pub(crate) effect_kind_by_intern: Vec<Option<crate::v03::foundation::ids::EffectKindId>>,
+
+    pub(crate) param_intern_by_id: Vec<InternId>,
+    /// Dense map: `InternId.0 as usize -> Some(ParamId)`.
+    pub(crate) param_id_by_intern: Vec<Option<crate::v03::foundation::ids::ParamId>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +123,7 @@ pub(crate) struct NodeIR {
 
     pub(crate) props: NodePropsIR,
 
-    pub(crate) effects: Vec<EffectInstanceIR>,
+    pub(crate) effects: Vec<EffectBindingIR>,
     pub(crate) mask: Option<MaskIR>,
     pub(crate) transition_in: Option<TransitionSpecIR>,
     pub(crate) transition_out: Option<TransitionSpecIR>,
@@ -211,8 +218,4 @@ pub(crate) struct TransitionSpecIR {
     pub(crate) params: Vec<(InternId, JsonValue)>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct EffectInstanceIR {
-    pub(crate) kind: InternId,
-    pub(crate) params: Vec<(InternId, JsonValue)>,
-}
+// Effects are bound during normalization to avoid any runtime param-name lookups.

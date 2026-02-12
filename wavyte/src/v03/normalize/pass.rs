@@ -3,12 +3,14 @@ use crate::v03::animation::anim::{
     Anim, AnimDef, AnimTaggedDef, InterpMode, Keyframe, Keyframes, Procedural, ProceduralKind,
 };
 use crate::v03::assets::color::ColorDef;
+use crate::v03::effects::binding::{EffectBindingIR, ResolvedParamIR, ResolvedParamValueIR};
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx, VarId};
+use crate::v03::foundation::ids::{EffectKindId, ParamId};
 use crate::v03::normalize::intern::{InternId, StringInterner};
 use crate::v03::normalize::ir::{
-    AssetIR, CollectionModeIR, CompositionIR, EffectInstanceIR, ExprSourceIR, LayoutIR, MaskIR,
-    MaskModeIR, MaskSourceIR, NodeIR, NodeKindIR, NodePropsIR, NormalizedComposition,
-    RegistryBindings, ShapeIR, TransitionSpecIR, ValueTypeIR, VarValueIR,
+    AssetIR, CollectionModeIR, CompositionIR, ExprSourceIR, LayoutIR, MaskIR, MaskModeIR,
+    MaskSourceIR, NodeIR, NodeKindIR, NodePropsIR, NormalizedComposition, RegistryBindings,
+    ShapeIR, TransitionSpecIR, ValueTypeIR, VarValueIR,
 };
 use crate::v03::normalize::property::{PropertyIndex, PropertyKey};
 use crate::v03::scene::model::{
@@ -45,6 +47,7 @@ pub(crate) fn normalize(def: &CompositionDef) -> Result<NormalizedComposition, N
 
     let mut interner = StringInterner::new();
     let mut expr_sources = Vec::<ExprSourceIR>::new();
+    let mut registries_builder = RegistryBindingsBuilder::default();
 
     // Assets: deterministic order by BTreeMap key ordering.
     let mut asset_key_by_idx = Vec::with_capacity(def.assets.len());
@@ -83,7 +86,10 @@ pub(crate) fn normalize(def: &CompositionDef) -> Result<NormalizedComposition, N
         &mut node_id_by_idx,
         &mut node_idx_by_id,
         &mut expr_sources,
+        &mut registries_builder,
     )?;
+
+    let registries = registries_builder.build(&interner);
 
     let ir = CompositionIR {
         canvas: Canvas {
@@ -101,7 +107,7 @@ pub(crate) fn normalize(def: &CompositionDef) -> Result<NormalizedComposition, N
         nodes,
         root,
         layout: LayoutIR::default(),
-        registries: RegistryBindings::default(),
+        registries,
     };
 
     Ok(NormalizedComposition {
@@ -180,6 +186,61 @@ fn normalize_color_value(c: &ColorDef) -> VarValueIR {
     VarValueIR::Color(c.to_rgba8_premul())
 }
 
+#[derive(Debug, Default)]
+struct RegistryBindingsBuilder {
+    effect_kind_id_by_intern: HashMap<InternId, EffectKindId>,
+    effect_intern_by_id: Vec<InternId>,
+
+    param_id_by_intern: HashMap<InternId, ParamId>,
+    param_intern_by_id: Vec<InternId>,
+}
+
+impl RegistryBindingsBuilder {
+    fn effect_kind_id(&mut self, kind: InternId) -> EffectKindId {
+        if let Some(&id) = self.effect_kind_id_by_intern.get(&kind) {
+            return id;
+        }
+        let id = EffectKindId(u16::try_from(self.effect_intern_by_id.len()).unwrap_or(u16::MAX));
+        self.effect_intern_by_id.push(kind);
+        self.effect_kind_id_by_intern.insert(kind, id);
+        id
+    }
+
+    fn param_id(&mut self, key: InternId) -> ParamId {
+        if let Some(&id) = self.param_id_by_intern.get(&key) {
+            return id;
+        }
+        let id = ParamId(u16::try_from(self.param_intern_by_id.len()).unwrap_or(u16::MAX));
+        self.param_intern_by_id.push(key);
+        self.param_id_by_intern.insert(key, id);
+        id
+    }
+
+    fn build(&self, interner: &StringInterner) -> RegistryBindings {
+        let mut effect_kind_by_intern: Vec<Option<EffectKindId>> = vec![None; interner.len()];
+        for (&k, &id) in &self.effect_kind_id_by_intern {
+            if let Some(slot) = effect_kind_by_intern.get_mut(k.0 as usize) {
+                *slot = Some(id);
+            }
+        }
+
+        let mut param_id_by_intern: Vec<Option<ParamId>> = vec![None; interner.len()];
+        for (&k, &id) in &self.param_id_by_intern {
+            if let Some(slot) = param_id_by_intern.get_mut(k.0 as usize) {
+                *slot = Some(id);
+            }
+        }
+
+        RegistryBindings {
+            effect_intern_by_id: self.effect_intern_by_id.clone(),
+            effect_kind_by_intern,
+            param_intern_by_id: self.param_intern_by_id.clone(),
+            param_id_by_intern,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn normalize_node(
     node: &NodeDef,
     interner: &mut StringInterner,
@@ -188,6 +249,7 @@ fn normalize_node(
     node_id_by_idx: &mut Vec<InternId>,
     node_idx_by_id: &mut HashMap<InternId, NodeIdx>,
     expr_sources: &mut Vec<ExprSourceIR>,
+    registries: &mut RegistryBindingsBuilder,
 ) -> Result<NodeIdx, NormalizeError> {
     let idx_u32 = u32::try_from(nodes.len()).map_err(|_| NormalizeError::TooManyNodes)?;
     let idx = NodeIdx(idx_u32);
@@ -204,7 +266,7 @@ fn normalize_node(
     let effects = node
         .effects
         .iter()
-        .map(|e| normalize_effect(e, interner))
+        .map(|e| normalize_effect(e, interner, registries))
         .collect();
     let mask = node.mask.as_ref().map(|m| normalize_mask(m, interner));
     let transition_in = node
@@ -251,6 +313,7 @@ fn normalize_node(
         node_id_by_idx,
         node_idx_by_id,
         expr_sources,
+        registries,
     )?;
     nodes[idx.0 as usize].kind = kind;
     nodes[idx.0 as usize].props = props;
@@ -268,6 +331,7 @@ fn normalize_kind_and_props(
     node_id_by_idx: &mut Vec<InternId>,
     node_idx_by_id: &mut HashMap<InternId, NodeIdx>,
     expr_sources: &mut Vec<ExprSourceIR>,
+    registries: &mut RegistryBindingsBuilder,
 ) -> Result<(NodeKindIR, NodePropsIR), NormalizeError> {
     let mut props = normalize_props(
         self_idx,
@@ -294,6 +358,7 @@ fn normalize_kind_and_props(
                     node_id_by_idx,
                     node_idx_by_id,
                     expr_sources,
+                    registries,
                 )?;
                 child_idxs.push(child_idx);
             }
@@ -364,14 +429,46 @@ fn normalize_kind_and_props(
     Ok((kind, props))
 }
 
-fn normalize_effect(e: &EffectInstanceDef, interner: &mut StringInterner) -> EffectInstanceIR {
-    let kind = interner.intern(&e.kind);
-    let params = e
-        .params
-        .iter()
-        .map(|(k, v)| (interner.intern(k), v.clone()))
-        .collect();
-    EffectInstanceIR { kind, params }
+fn normalize_effect(
+    e: &EffectInstanceDef,
+    interner: &mut StringInterner,
+    registries: &mut RegistryBindingsBuilder,
+) -> EffectBindingIR {
+    fn resolve_param_value(v: &serde_json::Value) -> ResolvedParamValueIR {
+        match v {
+            serde_json::Value::Number(n) => ResolvedParamValueIR::F64(n.as_f64().unwrap_or(0.0)),
+            serde_json::Value::Bool(b) => ResolvedParamValueIR::Bool(*b),
+            serde_json::Value::String(s) => ResolvedParamValueIR::String(s.clone()),
+            serde_json::Value::Array(arr) => {
+                if arr.len() == 2 {
+                    let x = arr[0].as_f64();
+                    let y = arr[1].as_f64();
+                    if let (Some(x), Some(y)) = (x, y) {
+                        return ResolvedParamValueIR::Vec2(crate::foundation::core::Vec2::new(
+                            x, y,
+                        ));
+                    }
+                }
+                ResolvedParamValueIR::Json(v.clone())
+            }
+            _ => ResolvedParamValueIR::Json(v.clone()),
+        }
+    }
+
+    let kind_intern = interner.intern(&e.kind);
+    let kind = registries.effect_kind_id(kind_intern);
+
+    let mut params = smallvec::SmallVec::<[ResolvedParamIR; 8]>::new();
+    for (k, v) in &e.params {
+        let key_intern = interner.intern(k);
+        let id = registries.param_id(key_intern);
+        params.push(ResolvedParamIR {
+            id,
+            value: resolve_param_value(v),
+        });
+    }
+
+    EffectBindingIR { kind, params }
 }
 
 fn normalize_transition(t: &TransitionSpecDef, interner: &mut StringInterner) -> TransitionSpecIR {

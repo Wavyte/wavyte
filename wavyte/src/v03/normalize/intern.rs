@@ -31,4 +31,8 @@ impl StringInterner {
     pub(crate) fn get(&self, id: InternId) -> &str {
         &self.strs_by_id[id.0 as usize]
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.strs_by_id.len()
+    }
 }

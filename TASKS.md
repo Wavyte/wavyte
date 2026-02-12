@@ -187,7 +187,7 @@ Goal: allocation-free steady-state evaluation producing `EvaluatedGraph` + `Rend
 - Implement `Sequence` overlap window evaluation behavior.
 - Validation: canonical verify command set.
 
-- [ ] Commit 3.7: Effect binding and resolved param arrays
+- [x] Commit 3.7: Effect binding and resolved param arrays
 - Implement `EffectKindId` binding, `ParamId` mapping, `AnimParam`, `ResolvedParam`.
 - Add registry binding rule: kind->impl lookup is id-indexed.
 - Validation: canonical verify command set.
