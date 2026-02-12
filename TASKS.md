@@ -269,39 +269,39 @@ Goal: deterministic DAG plan, surface lifetimes, fusion and stable fingerprintin
 
 Goal: pooled execution of DAG plan with parallel scheduling and correct kernels.
 
-Commit 6.1: Surface pool implementation with caps
+- [x] Commit 6.1: Surface pool implementation with caps
 - Implement bucketed pool keyed by desc; enforce global and per-bucket caps.
 - Expose pool stats for benches/tests.
 - Validation: canonical verify command set.
 
-Commit 6.2: DAG scheduler implementation
+- [ ] Commit 6.2: DAG scheduler implementation
 - Dependency-count ready queue.
 - Optional parallel op execution when safe.
 - Validation: canonical verify command set.
 
-Commit 6.3: vello_cpu draw implementation for leaf draws
+- [ ] Commit 6.3: vello_cpu draw implementation for leaf draws
 - Implement draw ops for image/svg/text/path/video/solidrect/gradient/noise (as available).
 - Keep caches out of hot path except bounded first-use caches.
 - Validation: canonical verify command set.
 
-Commit 6.4: Implement blur kernel (pooled scratch)
+- [ ] Commit 6.4: Implement blur kernel (pooled scratch)
 - Separable gaussian; test endpoints and invariants.
 - Validation: canonical verify command set.
 
-Commit 6.5: Implement mask apply kernel
+- [ ] Commit 6.5: Implement mask apply kernel
 - Alpha/luma/stencil modes, mode-selected function outside pixel loop.
 - Validation: canonical verify command set.
 
-Commit 6.6: Implement color matrix kernel
+- [ ] Commit 6.6: Implement color matrix kernel
 - Single-pass matrix; add correctness tests on small buffers.
 - Validation: canonical verify command set.
 
-Commit 6.7: Implement blend/composite ops
+- [ ] Commit 6.7: Implement blend/composite ops
 - Implement v0.3 closed blend set.
 - Ensure branch-free inner loops, dispatch outside loops.
 - Validation: canonical verify command set.
 
-Commit 6.8: Surface pool plateau gate
+- [ ] Commit 6.8: Surface pool plateau gate
 - Render 300 frames and assert pool bytes plateau after warmup.
 - Validation: canonical verify command set.
 

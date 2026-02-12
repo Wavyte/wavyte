@@ -55,7 +55,7 @@ pub(crate) struct SurfaceId(pub(crate) u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct OpId(pub(crate) u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PixelFormat {
     Rgba8Premul,
 }
