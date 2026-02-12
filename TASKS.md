@@ -76,17 +76,17 @@ Push policy after each commit:
 
 Goal: land the boundary/runtime split and build deterministic `CompositionIR` with id-based references.
 
-Commit 1.1: Add v0.3 module skeletons and feature gating
+- [x] Commit 1.1: Add v0.3 module skeletons and feature gating
 - Add new module tree per `wavyte_v03_proposal_final.md` section 18, behind a feature like `v03`.
 - Ensure `--all-features` builds with docs/clippy (document all `pub` surfaces).
 - Validation: canonical verify command set.
 
-Commit 1.2: Add v0.3 ID types and interner
+- [ ] Commit 1.2: Add v0.3 ID types and interner
 - Add `NodeIdx`, `AssetIdx`, `EffectKindId`, `TransitionKindId`, `ParamId`, `PropertyId`, `VarId`.
 - Add `normalize/intern.rs` string interner and stable id allocation.
 - Validation: canonical verify command set.
 
-Commit 1.3: Add `PropertyKey` and `(NodeIdx, PropertyKey) -> PropertyId`
+- [ ] Commit 1.3: Add `PropertyKey` and `(NodeIdx, PropertyKey) -> PropertyId`
 - Define the stable v0.3 lane set from `wavyte_v03_proposal_final.md` section 4.4 and 7.1.
 - Add deterministic ordering rules for ids and property ids.
 - Validation: canonical verify command set.

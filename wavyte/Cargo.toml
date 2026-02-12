@@ -19,6 +19,7 @@ path = "src/lib.rs"
 default = []
 media-ffmpeg = []
 alloc-track = ["dep:stats_alloc"]
+v03 = []
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]

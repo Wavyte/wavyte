@@ -35,6 +35,8 @@ mod eval;
 mod foundation;
 mod layout;
 mod render;
+#[cfg(feature = "v03")]
+mod v03;
 
 /// High-level, standalone documentation for Wavyte’s concepts and architecture.
 pub mod guide;
