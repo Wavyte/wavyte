@@ -73,6 +73,18 @@ fn lower_expr(e: &Expr, out: &mut BytecodeProgram) -> Result<(), ExprError> {
             });
             Ok(())
         }
+        Expr::Prop(pid) => {
+            out.ops.push(Op::LoadProp(*pid));
+            Ok(())
+        }
+        Expr::Var(vid) => {
+            out.ops.push(Op::LoadVar(*vid));
+            Ok(())
+        }
+        Expr::Time(tf) => {
+            out.ops.push(Op::LoadTime(*tf));
+            Ok(())
+        }
         Expr::Path(_p) => Err(ExprError::new(
             0,
             "unresolved path in lowering; bind refs before lowering",

@@ -14,6 +14,10 @@ impl StringInterner {
         Self::default()
     }
 
+    pub(crate) fn lookup(&self, s: &str) -> Option<InternId> {
+        self.ids_by_str.get(s).copied()
+    }
+
     pub(crate) fn intern(&mut self, s: &str) -> InternId {
         if let Some(&id) = self.ids_by_str.get(s) {
             return id;

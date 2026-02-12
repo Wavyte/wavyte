@@ -1,4 +1,5 @@
 pub(crate) mod ast;
+pub(crate) mod bind;
 pub(crate) mod bytecode;
 pub(crate) mod error;
 pub(crate) mod lexer;

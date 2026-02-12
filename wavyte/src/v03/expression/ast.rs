@@ -16,6 +16,12 @@ pub(crate) enum Expr {
     },
     /// A dotted identifier path: `self.opacity`, `nodes.title.opacity`, `time.frame`.
     Path(Vec<String>),
+    /// Resolved property reference.
+    Prop(crate::v03::foundation::ids::PropertyId),
+    /// Resolved variable reference.
+    Var(crate::v03::foundation::ids::VarId),
+    /// Resolved time field reference.
+    Time(crate::v03::expression::bytecode::TimeField),
 }
 
 #[derive(Debug, Clone, PartialEq)]

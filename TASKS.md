@@ -132,7 +132,7 @@ Goal: compiled, typed, id-addressed expressions with topo evaluation and cycle e
 - Add unit tests for evaluation of arithmetic and built-ins.
 - Validation: canonical verify command set.
 
-Commit 2.3: Resolve refs to `PropertyId` and `VarId`
+- [x] Commit 2.3: Resolve refs to `PropertyId` and `VarId`
 - Implement binding of `nodes.<id>.<lane>` and `self.<lane>` into `PropertyId`.
 - Restrict to the v0.3 property ref surface (no deep paths, no effect params, no layout reads).
 - Validation: canonical verify command set.

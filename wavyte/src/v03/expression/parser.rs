@@ -233,7 +233,13 @@ impl Parser<'_> {
                 let args = self.parse_args()?;
                 let func = match e {
                     Expr::Path(mut p) if p.len() == 1 => p.pop().unwrap(),
-                    Expr::Lit(_) | Expr::Unary { .. } | Expr::Binary { .. } | Expr::Call { .. } => {
+                    Expr::Lit(_)
+                    | Expr::Unary { .. }
+                    | Expr::Binary { .. }
+                    | Expr::Call { .. }
+                    | Expr::Prop(_)
+                    | Expr::Var(_)
+                    | Expr::Time(_) => {
                         return Err(ExprError::new(
                             self.span().start,
                             "call target must be an identifier",

@@ -23,6 +23,7 @@ pub(crate) enum BuiltinId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TimeField {
     Frame,
+    Fps,
     Duration,
     Progress,
     Seconds,
