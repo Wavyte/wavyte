@@ -1,4 +1,3 @@
-use crate::compile::fingerprint::FrameFingerprint;
 use crate::v03::compile::plan::{
     BlendMode, CompositeOp, IrisShape, MaskGenSource, MaskMode, OpKind, PassFx, PixelFormat,
     RenderPlan, SlideDir, SurfaceDesc, SurfaceId, UnitKey, WipeDir,
@@ -9,6 +8,13 @@ use crate::v03::normalize::ir::{AssetIR, CompositionIR, ShapeIR, TransitionKindI
 use xxhash_rust::xxh3::Xxh3;
 
 const XXH3_SEED: u64 = 0x8b5ad4a0c7d8e9f1;
+
+/// Stable per-frame fingerprint used by static-frame elision caches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct FrameFingerprint {
+    pub(crate) hi: u64,
+    pub(crate) lo: u64,
+}
 
 pub(crate) fn fingerprint_plan(plan: &RenderPlan) -> FrameFingerprint {
     let mut h = StableHasher::new();

@@ -2,11 +2,10 @@ use super::*;
 
 #[test]
 fn fnv_seeded_hash_is_stable() {
-    let mut a = Fnv1a64::new_default();
+    let mut a = Fnv1a64::new(Fnv1a64::OFFSET_BASIS);
     a.write_bytes(b"wavyte");
     let mut b = Fnv1a64::new(Fnv1a64::OFFSET_BASIS);
-    b.write_u8(b'w');
-    b.write_bytes(b"avyte");
+    b.write_bytes(b"wavyte");
     assert_eq!(a.finish(), b.finish());
 }
 

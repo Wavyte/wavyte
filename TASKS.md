@@ -354,9 +354,10 @@ Goal: flip exports to v0.3, ship production-ready crate, and validate publish dr
 - Add perf baseline capture instructions.
 - Validation: canonical verify command set.
 
-- [ ] Commit 8.4: Remove or quarantine v0.2.1 public exports
+- [x] Commit 8.4: Remove or quarantine v0.2.1 public exports
 - Switch `wavyte/src/lib.rs` exports to v0.3 API surface.
 - Keep v0.2.1 code only if needed for historical reference, but do not expose it publicly.
+- Update `wavyte/tests/` and `wavyte/examples/` to v0.3-only (no v0.2 API usage).
 - Validation: canonical verify command set.
 
 - [ ] Commit 8.5: Hardening pass (docs, errors, determinism)

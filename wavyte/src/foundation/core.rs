@@ -161,47 +161,6 @@ impl Rgba8Premul {
     }
 }
 
-/// Authoring-space transform components for a clip.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Transform2D {
-    /// Translation in pixels.
-    pub translate: Vec2,
-    /// Rotation in radians around `anchor`.
-    pub rotation_rad: f64,
-    /// Non-uniform scale.
-    pub scale: Vec2, // default (1,1)
-    /// Pivot point in local clip space.
-    pub anchor: Vec2, // pivot in local space
-}
-
-impl Default for Transform2D {
-    fn default() -> Self {
-        Self {
-            translate: Vec2::ZERO,
-            rotation_rad: 0.0,
-            scale: Vec2::new(1.0, 1.0),
-            anchor: Vec2::ZERO,
-        }
-    }
-}
-
-impl Transform2D {
-    /// Convert this decomposed transform into a single affine matrix.
-    ///
-    /// Order is `T(translate) * T(anchor) * R(rotation) * S(scale) * T(-anchor)`.
-    pub fn to_affine(self) -> kurbo::Affine {
-        let t_translate = kurbo::Affine::translate(self.translate);
-        let t_anchor = kurbo::Affine::translate(self.anchor);
-        let t_unanchor = kurbo::Affine::translate(-self.anchor);
-        let t_rotate = kurbo::Affine::rotate(self.rotation_rad);
-        let t_scale = kurbo::Affine::scale_non_uniform(self.scale.x, self.scale.y);
-
-        // Canonical order:
-        // T(translate) * T(anchor) * R(rot) * S(scale) * T(-anchor)
-        t_translate * t_anchor * t_rotate * t_scale * t_unanchor
-    }
-}
-
 #[cfg(test)]
 #[path = "../../tests/unit/foundation/core.rs"]
 mod tests;

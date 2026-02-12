@@ -1,9 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{
-    composition::model::{AudioAsset, VideoAsset},
-    foundation::error::{WavyteError, WavyteResult},
-};
+use crate::foundation::error::{WavyteError, WavyteResult};
 
 /// Internal audio mixing sample rate used across decode/mix/encode pipeline.
 pub const MIX_SAMPLE_RATE: u32 = 48_000;
@@ -12,17 +9,12 @@ pub const MIX_SAMPLE_RATE: u32 = 48_000;
 /// Basic metadata about a source video file.
 pub struct VideoSourceInfo {
     /// Absolute source path used for probing/decoding.
+    #[cfg_attr(not(feature = "media-ffmpeg"), allow(dead_code))]
     pub source_path: PathBuf,
     /// Width in pixels.
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// Source stream FPS numerator.
-    pub fps_num: u32,
-    /// Source stream FPS denominator.
-    pub fps_den: u32,
-    /// Source duration in seconds (best effort).
-    pub duration_sec: f64,
     /// Whether ffprobe detected at least one audio stream.
     pub has_audio: bool,
 }
@@ -38,55 +30,18 @@ pub struct AudioPcm {
     pub interleaved_f32: Vec<f32>,
 }
 
-impl VideoSourceInfo {
-    /// Return source FPS as floating-point value.
-    pub fn source_fps(&self) -> f64 {
-        if self.fps_den == 0 {
-            0.0
-        } else {
-            f64::from(self.fps_num) / f64::from(self.fps_den)
-        }
-    }
-}
-
-/// Map clip-local timeline frame to source video time in seconds.
-pub fn video_source_time_sec(asset: &VideoAsset, clip_local_frames: u64, fps: crate::Fps) -> f64 {
-    let timeline_t = (clip_local_frames as f64) * (f64::from(fps.den) / f64::from(fps.num));
-    let mut src_t = asset.trim_start_sec + timeline_t * asset.playback_rate;
-    if let Some(end) = asset.trim_end_sec {
-        src_t = src_t.min(end.max(asset.trim_start_sec));
-    }
-    src_t.max(0.0)
-}
-
-/// Map clip-local timeline frame to source audio time in seconds.
-pub fn audio_source_time_sec(asset: &AudioAsset, clip_local_frames: u64, fps: crate::Fps) -> f64 {
-    let timeline_t = (clip_local_frames as f64) * (f64::from(fps.den) / f64::from(fps.num));
-    let mut src_t = asset.trim_start_sec + timeline_t * asset.playback_rate;
-    if let Some(end) = asset.trim_end_sec {
-        src_t = src_t.min(end.max(asset.trim_start_sec));
-    }
-    src_t.max(0.0)
-}
-
-#[cfg(feature = "media-ffmpeg")]
 /// Probe source video metadata through `ffprobe`.
+#[cfg(feature = "media-ffmpeg")]
 pub fn probe_video(source_path: &Path) -> WavyteResult<VideoSourceInfo> {
     #[derive(serde::Deserialize)]
     struct ProbeStream {
         codec_type: Option<String>,
         width: Option<u32>,
         height: Option<u32>,
-        r_frame_rate: Option<String>,
-    }
-    #[derive(serde::Deserialize)]
-    struct ProbeFormat {
-        duration: Option<String>,
     }
     #[derive(serde::Deserialize)]
     struct ProbeOut {
         streams: Vec<ProbeStream>,
-        format: Option<ProbeFormat>,
     }
 
     let out = std::process::Command::new("ffprobe")
@@ -122,15 +77,6 @@ pub fn probe_video(source_path: &Path) -> WavyteResult<VideoSourceInfo> {
     let height = video_stream
         .height
         .ok_or_else(|| WavyteError::evaluation("missing video height from ffprobe"))?;
-
-    let (fps_num, fps_den) = parse_ff_ratio(video_stream.r_frame_rate.as_deref().unwrap_or("0/1"))
-        .ok_or_else(|| WavyteError::evaluation("invalid video r_frame_rate"))?;
-    let duration_sec = parsed
-        .format
-        .as_ref()
-        .and_then(|f| f.duration.as_ref())
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.0);
     let has_audio = parsed
         .streams
         .iter()
@@ -140,9 +86,6 @@ pub fn probe_video(source_path: &Path) -> WavyteResult<VideoSourceInfo> {
         source_path: source_path.to_path_buf(),
         width,
         height,
-        fps_num,
-        fps_den,
-        duration_sec,
         has_audio,
     })
 }
@@ -244,20 +187,6 @@ pub fn decode_video_frame_rgba8(
     ))
 }
 
-#[cfg(not(feature = "media-ffmpeg"))]
-/// Decode up to `frame_count` sequential RGBA frames from source video.
-///
-/// Returns an error when `media-ffmpeg` feature is disabled.
-pub(crate) fn decode_video_frames_rgba8(
-    _source: &VideoSourceInfo,
-    _start_time_sec: f64,
-    _frame_count: u32,
-) -> WavyteResult<Vec<Vec<u8>>> {
-    Err(WavyteError::evaluation(
-        "video/audio assets require the 'media-ffmpeg' feature",
-    ))
-}
-
 #[cfg(feature = "media-ffmpeg")]
 /// Decode audio from media source to stereo interleaved `f32` PCM.
 pub fn decode_audio_f32_stereo(path: &Path, sample_rate: u32) -> WavyteResult<AudioPcm> {
@@ -329,17 +258,5 @@ pub fn decode_audio_f32_stereo(_path: &Path, _sample_rate: u32) -> WavyteResult<
     ))
 }
 
-#[cfg(feature = "media-ffmpeg")]
-fn parse_ff_ratio(s: &str) -> Option<(u32, u32)> {
-    let mut parts = s.split('/');
-    let a = parts.next()?.parse::<u32>().ok()?;
-    let b = parts.next()?.parse::<u32>().ok()?;
-    if b == 0 {
-        return None;
-    }
-    Some((a, b))
-}
-
-#[cfg(test)]
-#[path = "../../tests/unit/assets/media.rs"]
-mod tests;
+// No unit tests here: these functions shell out to `ffprobe`/`ffmpeg` and are best validated via
+// integration tests that can be conditionally ignored when the tools are unavailable.

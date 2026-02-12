@@ -16,17 +16,4 @@ fn fps_frames_secs_roundtrip_floor() {
     assert_eq!(fps.secs_to_frames_floor(secs), 123);
 }
 
-#[test]
-fn transform_to_affine_identity_and_translation() {
-    let t = Transform2D::default();
-    assert_eq!(t.to_affine(), kurbo::Affine::IDENTITY);
-
-    let t = Transform2D {
-        translate: Vec2::new(10.0, -2.5),
-        ..Transform2D::default()
-    };
-    assert_eq!(
-        t.to_affine(),
-        kurbo::Affine::translate(Vec2::new(10.0, -2.5))
-    );
-}
+// NOTE: v0.3 uses `kurbo::Affine` directly for runtime transforms.

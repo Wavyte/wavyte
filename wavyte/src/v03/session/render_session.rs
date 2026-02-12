@@ -3,7 +3,7 @@ use crate::foundation::error::{WavyteError, WavyteResult};
 use crate::v03::audio::manifest::build_audio_manifest;
 use crate::v03::audio::mix::{mix_manifest, write_mix_to_f32le_file};
 use crate::v03::compile::compiler::compile_frame;
-use crate::v03::compile::fingerprint::fingerprint_eval;
+use crate::v03::compile::fingerprint::{FrameFingerprint, fingerprint_eval};
 use crate::v03::encode::sink::{AudioInputConfig, FrameSink, SinkConfig};
 use crate::v03::eval::evaluator::Evaluator;
 use crate::v03::expression::compile::compile_expr_program;
@@ -297,10 +297,7 @@ impl RenderSession {
                     let chunk_end = (chunk_start + chunk_size).min(range_end);
 
                     if self.opts.static_frame_elision {
-                        let mut cache = HashMap::<
-                            crate::compile::fingerprint::FrameFingerprint,
-                            Arc<FrameRGBA>,
-                        >::new();
+                        let mut cache = HashMap::<FrameFingerprint, Arc<FrameRGBA>>::new();
                         for f in chunk_start..chunk_end {
                             let g = self
                                 .eval
@@ -456,7 +453,7 @@ fn render_chunk_unique_with_elision(
     let frames: Vec<u64> = (start..end).collect();
     let mut uniq = Vec::<u64>::new();
     let mut map = Vec::<usize>::with_capacity(frames.len());
-    let mut seen = HashMap::<crate::compile::fingerprint::FrameFingerprint, usize>::new();
+    let mut seen = HashMap::<FrameFingerprint, usize>::new();
 
     for &f in &frames {
         let g = eval_main

@@ -1,12 +1,5 @@
 use crate::foundation::error::{WavyteError, WavyteResult};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SvgRasterKey {
-    pub asset: crate::assets::store::AssetId,
-    pub width: u32,
-    pub height: u32,
-}
-
 /// Compute a conservative raster size for an SVG given the draw transform.
 ///
 /// The returned `(width, height, transform_adjust)` are used as:
