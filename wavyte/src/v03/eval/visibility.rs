@@ -1,9 +1,11 @@
+use crate::foundation::math::Fnv1a64;
 use crate::v03::animation::anim::{Anim, SampleCtx};
 use crate::v03::eval::context::NodeTimeCtx;
 use crate::v03::eval::properties::PropertyValues;
 use crate::v03::expression::vm::VmError;
 use crate::v03::foundation::ids::NodeIdx;
 use crate::v03::normalize::ir::{CollectionModeIR, CompositionIR, NodeKindIR};
+use crate::v03::normalize::property::PropertyKey;
 
 #[derive(Debug, Default)]
 pub(crate) struct VisibilityState {
@@ -92,7 +94,7 @@ fn switch_active_index(
         Anim::Procedural(p) => Ok(p.sample(SampleCtx {
             fps: ir.fps,
             frame,
-            seed: ir.seed,
+            seed: mixed_seed(ir.seed, switch_node, PropertyKey::SwitchActiveIndex),
         })),
         Anim::Reference(pid) => {
             let Some(props) = props else {
@@ -103,6 +105,13 @@ fn switch_active_index(
             props.get(*pid)?.as_u64_floor()
         }
     }
+}
+
+fn mixed_seed(base: u64, node: NodeIdx, lane: PropertyKey) -> u64 {
+    let mut h = Fnv1a64::new(base);
+    h.write_u64(node.0 as u64);
+    h.write_u64(lane.as_u32() as u64);
+    h.finish()
 }
 
 #[cfg(test)]

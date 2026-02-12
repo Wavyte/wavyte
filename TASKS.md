@@ -169,7 +169,7 @@ Goal: allocation-free steady-state evaluation producing `EvaluatedGraph` + `Rend
 - Ensure invisible nodes are treated as `display:none` for layout.
 - Validation: canonical verify command set.
 
-- [ ] Commit 3.4: DFS evaluator core and context stack
+- [x] Commit 3.4: DFS evaluator core and context stack
 - Implement inherited transform/opacity stack.
 - Emit `EvaluatedLeaf` entries (compact ids, smallvec fields).
 - Preallocate and reuse vectors per frame (no allocations after warmup).

@@ -1888,6 +1888,7 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "smallvec",
  "stats_alloc",
  "thiserror",
  "tracing",

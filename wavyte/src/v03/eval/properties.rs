@@ -1,3 +1,4 @@
+use crate::foundation::math::Fnv1a64;
 use crate::v03::animation::anim::{Anim, SampleCtx};
 use crate::v03::eval::context::NodeTimeCtx;
 use crate::v03::expression::bytecode::TimeField;
@@ -115,73 +116,68 @@ fn sample_node_lane(
         .copied()
         .ok_or_else(|| VmError::new("node time ctx out of range"))?;
     let frame = t.sample_frame_u64();
+    let ctx = SampleCtx {
+        fps: ir.fps,
+        frame,
+        seed: mixed_seed(ir.seed, node, lane),
+    };
 
     match lane {
         PropertyKey::Opacity => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.opacity,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::TransformTranslateX => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.translate_x,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::TransformTranslateY => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.translate_y,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::TransformRotationRad => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.rotation_rad,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::TransformScaleX => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.scale_x,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::TransformScaleY => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.scale_y,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::TransformAnchorX => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.anchor_x,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::TransformAnchorY => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.anchor_y,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::TransformSkewX => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.skew_x_deg,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::TransformSkewY => Ok(ValueSlot::F64(sample_anim_f64(
             &node_ir.props.skew_y_deg,
-            ir,
-            frame,
+            ctx,
             vals,
         )?)),
         PropertyKey::SwitchActiveIndex => {
             let Some(anim) = node_ir.props.switch_active.as_ref() else {
                 return Ok(ValueSlot::U64(0));
             };
-            Ok(ValueSlot::U64(sample_anim_u64(anim, ir, frame, vals)?))
+            Ok(ValueSlot::U64(sample_anim_u64(anim, ctx, vals)?))
         }
         PropertyKey::LayoutX
         | PropertyKey::LayoutY
@@ -192,38 +188,20 @@ fn sample_node_lane(
     }
 }
 
-fn sample_anim_f64(
-    a: &Anim<f64>,
-    ir: &CompositionIR,
-    frame: u64,
-    vals: &PropertyValues,
-) -> Result<f64, VmError> {
+fn sample_anim_f64(a: &Anim<f64>, ctx: SampleCtx, vals: &PropertyValues) -> Result<f64, VmError> {
     match a {
         Anim::Constant(v) => Ok(*v),
-        Anim::Keyframes(k) => Ok(k.sample(frame)),
-        Anim::Procedural(p) => Ok(p.sample(SampleCtx {
-            fps: ir.fps,
-            frame,
-            seed: ir.seed,
-        })),
+        Anim::Keyframes(k) => Ok(k.sample(ctx.frame)),
+        Anim::Procedural(p) => Ok(p.sample(ctx)),
         Anim::Reference(pid) => Ok(vals.get(*pid)?.as_f64()?),
     }
 }
 
-fn sample_anim_u64(
-    a: &Anim<u64>,
-    ir: &CompositionIR,
-    frame: u64,
-    vals: &PropertyValues,
-) -> Result<u64, VmError> {
+fn sample_anim_u64(a: &Anim<u64>, ctx: SampleCtx, vals: &PropertyValues) -> Result<u64, VmError> {
     match a {
         Anim::Constant(v) => Ok(*v),
-        Anim::Keyframes(k) => Ok(k.sample(frame)),
-        Anim::Procedural(p) => Ok(p.sample(SampleCtx {
-            fps: ir.fps,
-            frame,
-            seed: ir.seed,
-        })),
+        Anim::Keyframes(k) => Ok(k.sample(ctx.frame)),
+        Anim::Procedural(p) => Ok(p.sample(ctx)),
         Anim::Reference(pid) => Ok(vals.get(*pid)?.as_u64_floor()?),
     }
 }
@@ -264,6 +242,13 @@ fn coerce_value(v: ValueSlot, ty: ValueType) -> Result<ValueSlot, VmError> {
             "Color is not supported in v0.3 expression runtime yet",
         )),
     }
+}
+
+fn mixed_seed(base: u64, node: NodeIdx, lane: PropertyKey) -> u64 {
+    let mut h = Fnv1a64::new(base);
+    h.write_u64(node.0 as u64);
+    h.write_u64(lane.as_u32() as u64);
+    h.finish()
 }
 
 #[cfg(test)]
