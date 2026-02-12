@@ -14,6 +14,8 @@ pub(crate) struct FfmpegSinkOpts {
     pub(crate) overwrite: bool,
     /// Background color used to flatten alpha (RGBA8, straight alpha).
     pub(crate) bg_rgba: [u8; 4],
+    /// Optional external raw PCM audio input fed into ffmpeg.
+    pub(crate) audio: Option<AudioInputConfig>,
 }
 
 impl FfmpegSinkOpts {
@@ -22,8 +24,16 @@ impl FfmpegSinkOpts {
             out_path: out_path.into(),
             overwrite: true,
             bg_rgba: [0, 0, 0, 255],
+            audio: None,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AudioInputConfig {
+    pub(crate) path: PathBuf,
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u16,
 }
 
 /// Video-only v0.3 sink that spawns the system `ffmpeg` and streams raw frames to stdin.
@@ -109,16 +119,50 @@ impl FrameSink for FfmpegSink {
         push_input_fps(&mut cmd, cfg.fps);
         cmd.args(["-i", "pipe:0"]);
 
-        // Output: h264 + yuv420p for broad compatibility.
-        cmd.args([
-            "-an",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-        ]);
+        if let Some(audio) = &self.opts.audio {
+            if audio.sample_rate == 0 {
+                return Err(WavyteError::validation(
+                    "audio sample_rate must be non-zero when audio is enabled",
+                ));
+            }
+            if audio.channels == 0 {
+                return Err(WavyteError::validation(
+                    "audio channels must be non-zero when audio is enabled",
+                ));
+            }
+            cmd.args([
+                "-f",
+                "f32le",
+                "-ar",
+                &audio.sample_rate.to_string(),
+                "-ac",
+                &audio.channels.to_string(),
+                "-i",
+            ])
+            .arg(&audio.path)
+            .args([
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+            ]);
+        } else {
+            // Output: h264 + yuv420p for broad compatibility.
+            cmd.args([
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+            ]);
+        }
         cmd.arg(&self.opts.out_path);
 
         let mut child = cmd.spawn().map_err(|e| {

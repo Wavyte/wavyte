@@ -323,7 +323,7 @@ Goal: sink-based streaming and audio mixing outside per-frame loop.
 - Enforce Switch audio constraint: active must be constant over range (else validation error for audio).
 - Validation: canonical verify command set.
 
-- [ ] Commit 7.4: Integrate audio into `FfmpegSink`
+- [x] Commit 7.4: Integrate audio into `FfmpegSink`
 - Provide `.f32le` temp file input (baseline).
 - Ensure ffmpeg spawn and teardown are robust.
 - Validation: canonical verify command set.
