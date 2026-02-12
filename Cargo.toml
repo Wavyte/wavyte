@@ -3,6 +3,7 @@ members = [
   "wavyte",
   "wavyte-cli",
   "bench",
+  "wavyte-std",
 ]
 default-members = [
   "wavyte",

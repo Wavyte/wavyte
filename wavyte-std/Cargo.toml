@@ -1,0 +1,20 @@
+[package]
+name = "wavyte-std"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.93"
+license = "AGPL-3.0-only"
+description = "Higher-level presets and JSON builders for Wavyte v0.3"
+repository = "https://github.com/Wavyte/wavyte"
+homepage = "https://github.com/Wavyte/wavyte"
+documentation = "https://docs.rs/wavyte-std"
+readme = "../README.md"
+keywords = ["video", "rendering", "compositing", "ffmpeg", "motion-graphics"]
+
+[lib]
+name = "wavyte_std"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1"
+wavyte = { path = "../wavyte" }

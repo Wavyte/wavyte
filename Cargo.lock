@@ -1896,7 +1896,7 @@ dependencies = [
 
 [[package]]
 name = "wavyte"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "image",
@@ -1919,7 +1919,7 @@ dependencies = [
 
 [[package]]
 name = "wavyte-bench"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -1928,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "wavyte-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1936,6 +1936,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "usvg",
+ "wavyte",
+]
+
+[[package]]
+name = "wavyte-std"
+version = "0.3.0"
+dependencies = [
+ "serde_json",
  "wavyte",
 ]
 

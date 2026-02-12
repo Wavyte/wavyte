@@ -367,9 +367,10 @@ Goal: flip exports to v0.3, ship production-ready crate, and validate publish dr
 - Remove v0.2.x code/test vestiges from the repo tree (v0.3-only branch endpoint).
 - Validation: canonical verify command set.
 
-- [ ] Commit 8.6: Version bump to `0.3.0` and docs update
+- [x] Commit 8.6: Version bump to `0.3.0` and docs update
 - Update `wavyte/Cargo.toml` and related version metadata.
 - Update `README.md` with v0.3 usage.
+- Add `wavyte-std` crate (higher-level presets/builders for v0.3).
 - Validation: canonical verify command set.
 
 - [ ] Commit 8.7: Publish dry run validation (production-ready endpoint)
