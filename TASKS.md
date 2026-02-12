@@ -230,37 +230,37 @@ Goal: cached Taffy tree with lane-typed style updates and deterministic rect inj
 
 Goal: deterministic DAG plan, surface lifetimes, fusion and stable fingerprinting.
 
-Commit 5.1: Define `RenderPlan` DAG types
+- [x] Commit 5.1: Define `RenderPlan` DAG types
 - Implement `SurfaceDesc`, `PixelFormat`, `OpKind`, `PassFx`, `CompositeOp`.
 - Ensure closed enums and deterministic serialization for hashing.
 - Validation: canonical verify command set.
 
-Commit 5.2: Compile `RenderUnit`s into draw ops and surfaces
+- [ ] Commit 5.2: Compile `RenderUnit`s into draw ops and surfaces
 - Implement unit isolation surfaces.
 - Implement leaf draw op mapping for each asset type.
 - Validation: canonical verify command set.
 
-Commit 5.3: Implement mask compilation pipeline
+- [ ] Commit 5.3: Implement mask compilation pipeline
 - Compile group masks into mask surfaces and `PassFx::MaskApply` ops.
 - Implement Node/Asset/Shape mask sources.
 - Validation: canonical verify command set.
 
-Commit 5.4: Implement transition pairing at unit level
+- [ ] Commit 5.4: Implement transition pairing at unit level
 - Implement pairing heuristic and fixed tolerance constants.
 - Add determinism tests for paired vs unpaired behavior.
 - Validation: canonical verify command set.
 
-Commit 5.5: Implement fusion rules
+- [ ] Commit 5.5: Implement fusion rules
 - Inline affine/opacity folding.
 - Color matrix folding (single matrix pass).
 - Identity elimination (blur radius 0, identity matrix, no-op masks).
 - Validation: canonical verify command set.
 
-Commit 5.6: Add plan determinism gate
+- [ ] Commit 5.6: Add plan determinism gate
 - Add test that compiles the same frame twice and asserts plan dump equality.
 - Validation: canonical verify command set.
 
-Commit 5.7: Implement stable hashing and fingerprinting
+- [ ] Commit 5.7: Implement stable hashing and fingerprinting
 - Implement byte-level stable encoding for hashes.
 - Produce `FrameFingerprint` for elision and determinism.
 - Validation: canonical verify command set.
