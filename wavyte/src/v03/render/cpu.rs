@@ -1057,6 +1057,254 @@ impl CpuBackendV03 {
         Ok(())
     }
 
+    fn exec_composite(
+        &mut self,
+        clear_to_transparent: bool,
+        cops: &[crate::v03::compile::plan::CompositeOp],
+        surfaces: &mut ExecSurfaces<'_>,
+        out: SurfaceId,
+    ) -> WavyteResult<()> {
+        let desc = surfaces.desc(out);
+        surfaces.ensure(out, desc)?;
+        let dst_i = out.0 as usize;
+
+        let (left, at_and_right) = surfaces.pixmaps.split_at_mut(dst_i);
+        let (dst_slot, right) = at_and_right
+            .split_first_mut()
+            .ok_or_else(|| WavyteError::evaluation("Composite output index OOB"))?;
+        let dst_pm = dst_slot
+            .as_mut()
+            .ok_or_else(|| WavyteError::evaluation("Composite output surface missing"))?;
+
+        if clear_to_transparent {
+            clear_pixmap_to_transparent(dst_pm);
+        }
+
+        let get_src_noalias = |sid: SurfaceId| -> WavyteResult<&vello_cpu::Pixmap> {
+            let i = sid.0 as usize;
+            let slot = if i < dst_i {
+                left.get(i)
+            } else {
+                right.get(i - dst_i - 1)
+            }
+            .and_then(|x| x.as_ref())
+            .ok_or_else(|| WavyteError::evaluation("Composite source surface missing"))?;
+            Ok(slot)
+        };
+
+        let (w, h) = (desc.width, desc.height);
+        let expected = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+        if dst_pm.data_as_u8_slice().len() != expected {
+            return Err(WavyteError::evaluation(
+                "Composite output buffer size mismatch",
+            ));
+        }
+
+        for c in cops {
+            match *c {
+                crate::v03::compile::plan::CompositeOp::Over {
+                    src,
+                    opacity,
+                    blend,
+                } => {
+                    let src_bytes: &[u8] = if src == out {
+                        // Alias fallback: snapshot current dst into scratch.
+                        self.blur_scratch_a.resize(expected, 0);
+                        self.blur_scratch_a
+                            .copy_from_slice(dst_pm.data_as_u8_slice());
+                        &self.blur_scratch_a
+                    } else {
+                        get_src_noalias(src)?.data_as_u8_slice()
+                    };
+                    composite_over_rgba8_premul(
+                        dst_pm.data_as_u8_slice_mut(),
+                        src_bytes,
+                        opacity,
+                        blend,
+                    )?;
+                }
+                crate::v03::compile::plan::CompositeOp::Crossfade { a, b, t } => {
+                    let a_bytes: &[u8] = if a == out {
+                        self.blur_scratch_a.resize(expected, 0);
+                        self.blur_scratch_a
+                            .copy_from_slice(dst_pm.data_as_u8_slice());
+                        &self.blur_scratch_a
+                    } else {
+                        get_src_noalias(a)?.data_as_u8_slice()
+                    };
+                    let b_bytes: &[u8] = if b == out {
+                        if a == out {
+                            &self.blur_scratch_a
+                        } else {
+                            self.blur_scratch_b.resize(expected, 0);
+                            self.blur_scratch_b
+                                .copy_from_slice(dst_pm.data_as_u8_slice());
+                            &self.blur_scratch_b
+                        }
+                    } else {
+                        get_src_noalias(b)?.data_as_u8_slice()
+                    };
+                    composite_crossfade_over_rgba8_premul(
+                        dst_pm.data_as_u8_slice_mut(),
+                        a_bytes,
+                        b_bytes,
+                        t,
+                    )?;
+                }
+                crate::v03::compile::plan::CompositeOp::Wipe {
+                    a,
+                    b,
+                    t,
+                    dir,
+                    soft_edge,
+                } => {
+                    let a_bytes: &[u8] = if a == out {
+                        self.blur_scratch_a.resize(expected, 0);
+                        self.blur_scratch_a
+                            .copy_from_slice(dst_pm.data_as_u8_slice());
+                        &self.blur_scratch_a
+                    } else {
+                        get_src_noalias(a)?.data_as_u8_slice()
+                    };
+                    let b_bytes: &[u8] = if b == out {
+                        if a == out {
+                            &self.blur_scratch_a
+                        } else {
+                            self.blur_scratch_b.resize(expected, 0);
+                            self.blur_scratch_b
+                                .copy_from_slice(dst_pm.data_as_u8_slice());
+                            &self.blur_scratch_b
+                        }
+                    } else {
+                        get_src_noalias(b)?.data_as_u8_slice()
+                    };
+                    composite_wipe_over_rgba8_premul(
+                        dst_pm.data_as_u8_slice_mut(),
+                        a_bytes,
+                        b_bytes,
+                        w,
+                        h,
+                        t,
+                        dir,
+                        soft_edge,
+                    )?;
+                }
+                crate::v03::compile::plan::CompositeOp::Slide { a, b, t, dir, push } => {
+                    let a_bytes: &[u8] = if a == out {
+                        self.blur_scratch_a.resize(expected, 0);
+                        self.blur_scratch_a
+                            .copy_from_slice(dst_pm.data_as_u8_slice());
+                        &self.blur_scratch_a
+                    } else {
+                        get_src_noalias(a)?.data_as_u8_slice()
+                    };
+                    let b_bytes: &[u8] = if b == out {
+                        if a == out {
+                            &self.blur_scratch_a
+                        } else {
+                            self.blur_scratch_b.resize(expected, 0);
+                            self.blur_scratch_b
+                                .copy_from_slice(dst_pm.data_as_u8_slice());
+                            &self.blur_scratch_b
+                        }
+                    } else {
+                        get_src_noalias(b)?.data_as_u8_slice()
+                    };
+                    composite_slide_over_rgba8_premul(
+                        dst_pm.data_as_u8_slice_mut(),
+                        a_bytes,
+                        b_bytes,
+                        w,
+                        h,
+                        t,
+                        dir,
+                        push,
+                    )?;
+                }
+                crate::v03::compile::plan::CompositeOp::Zoom {
+                    a,
+                    b,
+                    t,
+                    origin,
+                    from_scale,
+                } => {
+                    let a_bytes: &[u8] = if a == out {
+                        self.blur_scratch_a.resize(expected, 0);
+                        self.blur_scratch_a
+                            .copy_from_slice(dst_pm.data_as_u8_slice());
+                        &self.blur_scratch_a
+                    } else {
+                        get_src_noalias(a)?.data_as_u8_slice()
+                    };
+                    let b_bytes: &[u8] = if b == out {
+                        if a == out {
+                            &self.blur_scratch_a
+                        } else {
+                            self.blur_scratch_b.resize(expected, 0);
+                            self.blur_scratch_b
+                                .copy_from_slice(dst_pm.data_as_u8_slice());
+                            &self.blur_scratch_b
+                        }
+                    } else {
+                        get_src_noalias(b)?.data_as_u8_slice()
+                    };
+                    composite_zoom_over_rgba8_premul(
+                        dst_pm.data_as_u8_slice_mut(),
+                        a_bytes,
+                        b_bytes,
+                        w,
+                        h,
+                        t,
+                        origin,
+                        from_scale,
+                    )?;
+                }
+                crate::v03::compile::plan::CompositeOp::Iris {
+                    a,
+                    b,
+                    t,
+                    origin,
+                    shape,
+                    soft_edge,
+                } => {
+                    let a_bytes: &[u8] = if a == out {
+                        self.blur_scratch_a.resize(expected, 0);
+                        self.blur_scratch_a
+                            .copy_from_slice(dst_pm.data_as_u8_slice());
+                        &self.blur_scratch_a
+                    } else {
+                        get_src_noalias(a)?.data_as_u8_slice()
+                    };
+                    let b_bytes: &[u8] = if b == out {
+                        if a == out {
+                            &self.blur_scratch_a
+                        } else {
+                            self.blur_scratch_b.resize(expected, 0);
+                            self.blur_scratch_b
+                                .copy_from_slice(dst_pm.data_as_u8_slice());
+                            &self.blur_scratch_b
+                        }
+                    } else {
+                        get_src_noalias(b)?.data_as_u8_slice()
+                    };
+                    composite_iris_over_rgba8_premul(
+                        dst_pm.data_as_u8_slice_mut(),
+                        a_bytes,
+                        b_bytes,
+                        w,
+                        h,
+                        t,
+                        origin,
+                        shape,
+                        soft_edge,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_leaves_to(
         &mut self,
@@ -1136,6 +1384,17 @@ impl RenderBackendV03 for CpuBackendV03 {
                 }
                 OpKind::MaskGen { source } => {
                     self.exec_mask_gen(ir, interner, source, &mut surfaces, op.output)?;
+                }
+                OpKind::Composite {
+                    clear_to_transparent,
+                    ops,
+                } => {
+                    self.exec_composite(
+                        *clear_to_transparent,
+                        ops.as_ref(),
+                        &mut surfaces,
+                        op.output,
+                    )?;
                 }
                 OpKind::Pass {
                     fx: crate::v03::compile::plan::PassFx::Blur { radius_px, sigma },
@@ -1566,6 +1825,795 @@ fn color_matrix_rgba8_premul(src: &[u8], dst: &mut [u8], m: [f32; 20]) {
     }
 }
 
+fn premul_over_in_place_opacity(dst: &mut [u8], src: &[u8], opacity: f32) -> WavyteResult<()> {
+    if dst.len() != src.len() || !dst.len().is_multiple_of(4) {
+        return Err(WavyteError::evaluation(
+            "premul_over_in_place_opacity expects equal-length rgba8 buffers",
+        ));
+    }
+    let op = ((opacity.clamp(0.0, 1.0) * 255.0).round() as i32).clamp(0, 255) as u16;
+    if op == 0 {
+        return Ok(());
+    }
+
+    for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        let sa = mul_div255_u8(u16::from(s[3]), op);
+        if sa == 0 {
+            continue;
+        }
+        let inv = 255u16 - u16::from(sa);
+
+        d[3] = add_sat_u8(sa, mul_div255_u8(u16::from(d[3]), inv));
+        for c in 0..3 {
+            let sc = mul_div255_u8(u16::from(s[c]), op);
+            let dc = mul_div255_u8(u16::from(d[c]), inv);
+            d[c] = add_sat_u8(sc, dc);
+        }
+    }
+    Ok(())
+}
+
+fn composite_over_rgba8_premul(
+    dst: &mut [u8],
+    src: &[u8],
+    opacity: f32,
+    blend: crate::v03::compile::plan::BlendMode,
+) -> WavyteResult<()> {
+    if dst.len() != src.len() || !dst.len().is_multiple_of(4) {
+        return Err(WavyteError::evaluation(
+            "composite_over_rgba8_premul expects equal-length rgba8 buffers",
+        ));
+    }
+
+    // Perf contract: blend mode dispatch must be chosen once per op (not per pixel).
+    // This match is outside the inner loops; each branch monomorphizes a specialized blend kernel.
+    match blend {
+        crate::v03::compile::plan::BlendMode::Normal => {
+            premul_over_in_place_opacity(dst, src, opacity)
+        }
+        crate::v03::compile::plan::BlendMode::Multiply => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| s * d)
+        }
+        crate::v03::compile::plan::BlendMode::Screen => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| s + d - s * d)
+        }
+        crate::v03::compile::plan::BlendMode::Overlay => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| {
+                if d <= 0.5 {
+                    2.0 * s * d
+                } else {
+                    1.0 - 2.0 * (1.0 - s) * (1.0 - d)
+                }
+            })
+        }
+        crate::v03::compile::plan::BlendMode::Darken => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| s.min(d))
+        }
+        crate::v03::compile::plan::BlendMode::Lighten => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| s.max(d))
+        }
+        crate::v03::compile::plan::BlendMode::ColorDodge => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| {
+                if s >= 1.0 {
+                    1.0
+                } else {
+                    (d / (1.0 - s)).min(1.0)
+                }
+            })
+        }
+        crate::v03::compile::plan::BlendMode::ColorBurn => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| {
+                if s <= 0.0 {
+                    0.0
+                } else {
+                    1.0 - ((1.0 - d) / s).min(1.0)
+                }
+            })
+        }
+        crate::v03::compile::plan::BlendMode::SoftLight => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| {
+                if s <= 0.5 {
+                    d - (1.0 - 2.0 * s) * d * (1.0 - d)
+                } else {
+                    let g = if d <= 0.25 {
+                        ((16.0 * d - 12.0) * d + 4.0) * d
+                    } else {
+                        d.sqrt()
+                    };
+                    d + (2.0 * s - 1.0) * (g - d)
+                }
+            })
+        }
+        crate::v03::compile::plan::BlendMode::HardLight => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| {
+                if s <= 0.5 {
+                    2.0 * s * d
+                } else {
+                    1.0 - 2.0 * (1.0 - s) * (1.0 - d)
+                }
+            })
+        }
+        crate::v03::compile::plan::BlendMode::Difference => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| (d - s).abs())
+        }
+        crate::v03::compile::plan::BlendMode::Exclusion => {
+            composite_over_rgba8_premul_blend(dst, src, opacity, |s, d| d + s - 2.0 * d * s)
+        }
+    }
+}
+
+#[inline(always)]
+fn composite_over_rgba8_premul_blend<F>(
+    dst: &mut [u8],
+    src: &[u8],
+    opacity: f32,
+    blend_fn: F,
+) -> WavyteResult<()>
+where
+    F: Fn(f32, f32) -> f32,
+{
+    let opacity = opacity.clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+        return Ok(());
+    }
+
+    for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        // Porter-Duff "source-over" with blend applied to unpremultiplied channels:
+        // out_a = sa + da * (1 - sa)
+        // out_p = sp * (1 - da) + dp * (1 - sa) + B(sc, dc) * sa * da
+
+        // Premultiplied src scaled by op.
+        let sp_r = (s[0] as f32 / 255.0) * opacity;
+        let sp_g = (s[1] as f32 / 255.0) * opacity;
+        let sp_b = (s[2] as f32 / 255.0) * opacity;
+        let sa = (s[3] as f32 / 255.0) * opacity;
+
+        let dp_r = d[0] as f32 / 255.0;
+        let dp_g = d[1] as f32 / 255.0;
+        let dp_b = d[2] as f32 / 255.0;
+        let da = d[3] as f32 / 255.0;
+
+        let inv_sa = 1.0 - sa;
+        let out_a = (sa + da * inv_sa).clamp(0.0, 1.0);
+
+        let sc_r = if sa > 0.0 {
+            (sp_r / sa).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let sc_g = if sa > 0.0 {
+            (sp_g / sa).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let sc_b = if sa > 0.0 {
+            (sp_b / sa).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let dc_r = if da > 0.0 {
+            (dp_r / da).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let dc_g = if da > 0.0 {
+            (dp_g / da).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let dc_b = if da > 0.0 {
+            (dp_b / da).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let b_r = blend_fn(sc_r, dc_r).clamp(0.0, 1.0);
+        let b_g = blend_fn(sc_g, dc_g).clamp(0.0, 1.0);
+        let b_b = blend_fn(sc_b, dc_b).clamp(0.0, 1.0);
+
+        let out_p_r = (sp_r * (1.0 - da) + dp_r * (1.0 - sa) + b_r * sa * da).clamp(0.0, 1.0);
+        let out_p_g = (sp_g * (1.0 - da) + dp_g * (1.0 - sa) + b_g * sa * da).clamp(0.0, 1.0);
+        let out_p_b = (sp_b * (1.0 - da) + dp_b * (1.0 - sa) + b_b * sa * da).clamp(0.0, 1.0);
+
+        d[0] = (out_p_r * 255.0).round().clamp(0.0, 255.0) as u8;
+        d[1] = (out_p_g * 255.0).round().clamp(0.0, 255.0) as u8;
+        d[2] = (out_p_b * 255.0).round().clamp(0.0, 255.0) as u8;
+        d[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+
+    Ok(())
+}
+
+fn composite_crossfade_over_rgba8_premul(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    t: f32,
+) -> WavyteResult<()> {
+    if dst.len() != a.len() || dst.len() != b.len() || !dst.len().is_multiple_of(4) {
+        return Err(WavyteError::evaluation(
+            "composite_crossfade_over_rgba8_premul expects equal-length rgba8 buffers",
+        ));
+    }
+    let t = t.clamp(0.0, 1.0);
+    let tt = ((t * 255.0).round() as i32).clamp(0, 255) as u16;
+    let it = 255u16 - tt;
+    for ((d, ap), bp) in dst
+        .chunks_exact_mut(4)
+        .zip(a.chunks_exact(4))
+        .zip(b.chunks_exact(4))
+    {
+        let mut src = [0u8; 4];
+        for c in 0..4 {
+            let av = mul_div255_u8(u16::from(ap[c]), it);
+            let bv = mul_div255_u8(u16::from(bp[c]), tt);
+            src[c] = add_sat_u8(av, bv);
+        }
+        // Normal over with opacity=1.
+        let sa = src[3] as u16;
+        if sa == 0 {
+            continue;
+        }
+        let inv = 255u16 - sa;
+        d[3] = add_sat_u8(src[3], mul_div255_u8(u16::from(d[3]), inv));
+        for c in 0..3 {
+            let dc = mul_div255_u8(u16::from(d[c]), inv);
+            d[c] = add_sat_u8(src[c], dc);
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn composite_wipe_over_rgba8_premul(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    t: f32,
+    dir: crate::v03::compile::plan::WipeDir,
+    soft_edge: f32,
+) -> WavyteResult<()> {
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if dst.len() != expected || a.len() != expected || b.len() != expected {
+        return Err(WavyteError::evaluation(
+            "composite_wipe_over_rgba8_premul expects buffers matching width*height*4",
+        ));
+    }
+    let t = t.clamp(0.0, 1.0);
+    let soft_edge = soft_edge.max(0.0);
+
+    // Perf contract: direction dispatch is chosen once per op (not per pixel).
+    let (axis_len, pos_base, pos_step, axis_is_x) = match dir {
+        crate::v03::compile::plan::WipeDir::LeftToRight => (width as f32, 0.0, 1.0, true),
+        crate::v03::compile::plan::WipeDir::RightToLeft => {
+            (width as f32, (width.saturating_sub(1)) as f32, -1.0, true)
+        }
+        crate::v03::compile::plan::WipeDir::TopToBottom => (height as f32, 0.0, 1.0, false),
+        crate::v03::compile::plan::WipeDir::BottomToTop => (
+            height as f32,
+            (height.saturating_sub(1)) as f32,
+            -1.0,
+            false,
+        ),
+    };
+
+    let soft_px = soft_edge * axis_len.max(0.0);
+    let edge = t * (axis_len + 2.0 * soft_px) - soft_px;
+    let a_edge = edge - soft_px;
+    let b_edge = edge + soft_px;
+
+    // Dispatch the "soft edge" branch outside the pixel loop.
+    if soft_px <= 0.0 {
+        if axis_is_x {
+            composite_wipe_x_hard(dst, a, b, width, height, edge, pos_base, pos_step);
+        } else {
+            composite_wipe_y_hard(dst, a, b, width, height, edge, pos_base, pos_step);
+        }
+    } else if axis_is_x {
+        composite_wipe_x_soft(dst, a, b, width, height, a_edge, b_edge, pos_base, pos_step);
+    } else {
+        composite_wipe_y_soft(dst, a, b, width, height, a_edge, b_edge, pos_base, pos_step);
+    }
+
+    Ok(())
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_wipe_x_hard(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    edge: f32,
+    pos_base: f32,
+    pos_step: f32,
+) {
+    for y in 0..height {
+        for x in 0..width {
+            let pos = pos_base + pos_step * (x as f32);
+            let m_b = if pos < edge { 1.0 } else { 0.0 };
+            composite_mix_over_at(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_wipe_x_soft(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    a_edge: f32,
+    b_edge: f32,
+    pos_base: f32,
+    pos_step: f32,
+) {
+    for y in 0..height {
+        for x in 0..width {
+            let pos = pos_base + pos_step * (x as f32);
+            let m_b = smoothstep(a_edge, b_edge, pos);
+            composite_mix_over_at(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_wipe_y_hard(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    edge: f32,
+    pos_base: f32,
+    pos_step: f32,
+) {
+    for y in 0..height {
+        let pos = pos_base + pos_step * (y as f32);
+        let m_b = if pos < edge { 1.0 } else { 0.0 };
+        for x in 0..width {
+            composite_mix_over_at(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_wipe_y_soft(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    a_edge: f32,
+    b_edge: f32,
+    pos_base: f32,
+    pos_step: f32,
+) {
+    for y in 0..height {
+        let pos = pos_base + pos_step * (y as f32);
+        let m_b = smoothstep(a_edge, b_edge, pos);
+        for x in 0..width {
+            composite_mix_over_at(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+fn composite_mix_over_at(dst: &mut [u8], a: &[u8], b: &[u8], width: u32, x: u32, y: u32, m_b: f32) {
+    let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
+    let ap = &a[idx..idx + 4];
+    let bp = &b[idx..idx + 4];
+
+    let tt = ((m_b.clamp(0.0, 1.0) * 255.0).round() as i32).clamp(0, 255) as u16;
+    let it = 255u16 - tt;
+    let mut src = [0u8; 4];
+    for c in 0..4 {
+        let av = mul_div255_u8(u16::from(ap[c]), it);
+        let bv = mul_div255_u8(u16::from(bp[c]), tt);
+        src[c] = add_sat_u8(av, bv);
+    }
+
+    let d = &mut dst[idx..idx + 4];
+    let sa = src[3] as u16;
+    if sa == 0 {
+        return;
+    }
+    let inv = 255u16 - sa;
+    d[3] = add_sat_u8(src[3], mul_div255_u8(u16::from(d[3]), inv));
+    for c in 0..3 {
+        let dc = mul_div255_u8(u16::from(d[c]), inv);
+        d[c] = add_sat_u8(src[c], dc);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn composite_slide_over_rgba8_premul(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    t: f32,
+    dir: crate::v03::compile::plan::SlideDir,
+    push: bool,
+) -> WavyteResult<()> {
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if dst.len() != expected || a.len() != expected || b.len() != expected {
+        return Err(WavyteError::evaluation(
+            "composite_slide_over_rgba8_premul expects buffers matching width*height*4",
+        ));
+    }
+    let t = t.clamp(0.0, 1.0);
+    let w = width as f32;
+    let h = height as f32;
+
+    let (b_dx, b_dy) = match dir {
+        crate::v03::compile::plan::SlideDir::Left => ((1.0 - t) * w, 0.0),
+        crate::v03::compile::plan::SlideDir::Right => (-(1.0 - t) * w, 0.0),
+        crate::v03::compile::plan::SlideDir::Up => (0.0, (1.0 - t) * h),
+        crate::v03::compile::plan::SlideDir::Down => (0.0, -(1.0 - t) * h),
+    };
+    let (a_dx, a_dy) = if push {
+        match dir {
+            crate::v03::compile::plan::SlideDir::Left => (-t * w, 0.0),
+            crate::v03::compile::plan::SlideDir::Right => (t * w, 0.0),
+            crate::v03::compile::plan::SlideDir::Up => (0.0, -t * h),
+            crate::v03::compile::plan::SlideDir::Down => (0.0, t * h),
+        }
+    } else {
+        (0.0, 0.0)
+    };
+
+    for y in 0..height {
+        for x in 0..width {
+            let xf = x as f32;
+            let yf = y as f32;
+            let ax = (xf - a_dx).round() as i32;
+            let ay = (yf - a_dy).round() as i32;
+            let bx = (xf - b_dx).round() as i32;
+            let by = (yf - b_dy).round() as i32;
+
+            let ap = sample_px(a, width, height, ax, ay);
+            let bp = sample_px(b, width, height, bx, by);
+            let layer = premul_over_px(ap, bp); // b over a
+
+            let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
+            let d = &mut dst[idx..idx + 4];
+            let out = premul_over_px([d[0], d[1], d[2], d[3]], layer);
+            d.copy_from_slice(&out);
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn composite_zoom_over_rgba8_premul(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    t: f32,
+    origin: crate::foundation::core::Vec2,
+    from_scale: f32,
+) -> WavyteResult<()> {
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if dst.len() != expected || a.len() != expected || b.len() != expected {
+        return Err(WavyteError::evaluation(
+            "composite_zoom_over_rgba8_premul expects buffers matching width*height*4",
+        ));
+    }
+    let t = t.clamp(0.0, 1.0);
+    let s = (from_scale + (1.0 - from_scale) * t).max(1e-6);
+    let ox = origin.x as f32 * (width as f32);
+    let oy = origin.y as f32 * (height as f32);
+
+    for y in 0..height {
+        for x in 0..width {
+            let xf = x as f32;
+            let yf = y as f32;
+            let bx = ox + (xf - ox) / s;
+            let by = oy + (yf - oy) / s;
+            let bp = sample_px(b, width, height, bx.round() as i32, by.round() as i32);
+            let ap = sample_px(a, width, height, x as i32, y as i32);
+
+            // Crossfade + zoom.
+            let tt = ((t * 255.0).round() as i32).clamp(0, 255) as u16;
+            let it = 255u16 - tt;
+            let mut layer = [0u8; 4];
+            for c in 0..4 {
+                let av = mul_div255_u8(u16::from(ap[c]), it);
+                let bv = mul_div255_u8(u16::from(bp[c]), tt);
+                layer[c] = add_sat_u8(av, bv);
+            }
+
+            let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
+            let d = &mut dst[idx..idx + 4];
+            let out = premul_over_px([d[0], d[1], d[2], d[3]], layer);
+            d.copy_from_slice(&out);
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn composite_iris_over_rgba8_premul(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    t: f32,
+    origin: crate::foundation::core::Vec2,
+    shape: crate::v03::compile::plan::IrisShape,
+    soft_edge: f32,
+) -> WavyteResult<()> {
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if dst.len() != expected || a.len() != expected || b.len() != expected {
+        return Err(WavyteError::evaluation(
+            "composite_iris_over_rgba8_premul expects buffers matching width*height*4",
+        ));
+    }
+    let t = t.clamp(0.0, 1.0);
+
+    let ox = origin.x as f32 * (width as f32);
+    let oy = origin.y as f32 * (height as f32);
+    let max_x = ox.max((width as f32) - ox);
+    let max_y = oy.max((height as f32) - oy);
+
+    // Perf contract: shape dispatch is chosen once per op (not per pixel).
+    let max_dist = match shape {
+        crate::v03::compile::plan::IrisShape::Circle => (max_x * max_x + max_y * max_y).sqrt(),
+        crate::v03::compile::plan::IrisShape::Rect => max_x.max(max_y),
+        crate::v03::compile::plan::IrisShape::Diamond => max_x + max_y,
+    }
+    .max(1e-6);
+    let soft = (soft_edge.max(0.0) * max_dist).max(0.0);
+    let edge = t * (max_dist + 2.0 * soft) - soft;
+
+    if soft <= 0.0 {
+        match shape {
+            crate::v03::compile::plan::IrisShape::Circle => {
+                composite_iris_circle_hard(dst, a, b, width, height, ox, oy, edge)
+            }
+            crate::v03::compile::plan::IrisShape::Rect => {
+                composite_iris_rect_hard(dst, a, b, width, height, ox, oy, edge)
+            }
+            crate::v03::compile::plan::IrisShape::Diamond => {
+                composite_iris_diamond_hard(dst, a, b, width, height, ox, oy, edge)
+            }
+        }
+    } else {
+        let a_edge = edge - soft;
+        let b_edge = edge + soft;
+        match shape {
+            crate::v03::compile::plan::IrisShape::Circle => {
+                composite_iris_circle_soft(dst, a, b, width, height, ox, oy, a_edge, b_edge)
+            }
+            crate::v03::compile::plan::IrisShape::Rect => {
+                composite_iris_rect_soft(dst, a, b, width, height, ox, oy, a_edge, b_edge)
+            }
+            crate::v03::compile::plan::IrisShape::Diamond => {
+                composite_iris_diamond_soft(dst, a, b, width, height, ox, oy, a_edge, b_edge)
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_iris_circle_hard(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    ox: f32,
+    oy: f32,
+    edge: f32,
+) {
+    for y in 0..height {
+        for x in 0..width {
+            let dx = (x as f32) - ox;
+            let dy = (y as f32) - oy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let m_b = if dist <= edge { 1.0 } else { 0.0 };
+            composite_mix_over_px(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_iris_circle_soft(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    ox: f32,
+    oy: f32,
+    a_edge: f32,
+    b_edge: f32,
+) {
+    for y in 0..height {
+        for x in 0..width {
+            let dx = (x as f32) - ox;
+            let dy = (y as f32) - oy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let m_b = 1.0 - smoothstep(a_edge, b_edge, dist);
+            composite_mix_over_px(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_iris_rect_hard(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    ox: f32,
+    oy: f32,
+    edge: f32,
+) {
+    for y in 0..height {
+        for x in 0..width {
+            let dx = ((x as f32) - ox).abs();
+            let dy = ((y as f32) - oy).abs();
+            let dist = dx.max(dy);
+            let m_b = if dist <= edge { 1.0 } else { 0.0 };
+            composite_mix_over_px(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_iris_rect_soft(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    ox: f32,
+    oy: f32,
+    a_edge: f32,
+    b_edge: f32,
+) {
+    for y in 0..height {
+        for x in 0..width {
+            let dx = ((x as f32) - ox).abs();
+            let dy = ((y as f32) - oy).abs();
+            let dist = dx.max(dy);
+            let m_b = 1.0 - smoothstep(a_edge, b_edge, dist);
+            composite_mix_over_px(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_iris_diamond_hard(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    ox: f32,
+    oy: f32,
+    edge: f32,
+) {
+    for y in 0..height {
+        for x in 0..width {
+            let dx = ((x as f32) - ox).abs();
+            let dy = ((y as f32) - oy).abs();
+            let dist = dx + dy;
+            let m_b = if dist <= edge { 1.0 } else { 0.0 };
+            composite_mix_over_px(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn composite_iris_diamond_soft(
+    dst: &mut [u8],
+    a: &[u8],
+    b: &[u8],
+    width: u32,
+    height: u32,
+    ox: f32,
+    oy: f32,
+    a_edge: f32,
+    b_edge: f32,
+) {
+    for y in 0..height {
+        for x in 0..width {
+            let dx = ((x as f32) - ox).abs();
+            let dy = ((y as f32) - oy).abs();
+            let dist = dx + dy;
+            let m_b = 1.0 - smoothstep(a_edge, b_edge, dist);
+            composite_mix_over_px(dst, a, b, width, x, y, m_b);
+        }
+    }
+}
+
+#[inline(always)]
+fn composite_mix_over_px(dst: &mut [u8], a: &[u8], b: &[u8], width: u32, x: u32, y: u32, m_b: f32) {
+    let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
+    let ap = &a[idx..idx + 4];
+    let bp = &b[idx..idx + 4];
+
+    let tt = ((m_b.clamp(0.0, 1.0) * 255.0).round() as i32).clamp(0, 255) as u16;
+    let it = 255u16 - tt;
+    let mut layer = [0u8; 4];
+    for c in 0..4 {
+        let av = mul_div255_u8(u16::from(ap[c]), it);
+        let bv = mul_div255_u8(u16::from(bp[c]), tt);
+        layer[c] = add_sat_u8(av, bv);
+    }
+
+    let d = &mut dst[idx..idx + 4];
+    let out = premul_over_px([d[0], d[1], d[2], d[3]], layer);
+    d.copy_from_slice(&out);
+}
+
+fn premul_over_px(dst: [u8; 4], src: [u8; 4]) -> [u8; 4] {
+    let sa = src[3] as u16;
+    if sa == 0 {
+        return dst;
+    }
+    let inv = 255u16 - sa;
+    let mut out = [0u8; 4];
+    out[3] = add_sat_u8(src[3], mul_div255_u8(u16::from(dst[3]), inv));
+    for c in 0..3 {
+        let dc = mul_div255_u8(u16::from(dst[c]), inv);
+        out[c] = add_sat_u8(src[c], dc);
+    }
+    out
+}
+
+fn sample_px(src: &[u8], width: u32, height: u32, x: i32, y: i32) -> [u8; 4] {
+    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+        return [0, 0, 0, 0];
+    }
+    let idx = ((y as usize) * (width as usize) + (x as usize)) * 4;
+    [src[idx], src[idx + 1], src[idx + 2], src[idx + 3]]
+}
+
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    if x <= a {
+        return 0.0;
+    }
+    if x >= b {
+        return 1.0;
+    }
+    let t = (x - a) / (b - a);
+    (t * t * (3.0 - 2.0 * t)).clamp(0.0, 1.0)
+}
+
 fn premul_over_in_place(dst: &mut [u8], src: &[u8]) -> WavyteResult<()> {
     if dst.len() != src.len() || !dst.len().is_multiple_of(4) {
         return Err(WavyteError::evaluation(
@@ -1617,6 +2665,14 @@ mod tests {
     };
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    fn repeat_px(px: [u8; 4], n: usize) -> Vec<u8> {
+        let mut out = vec![0u8; n.saturating_mul(4)];
+        for c in out.chunks_exact_mut(4) {
+            c.copy_from_slice(&px);
+        }
+        out
+    }
 
     #[test]
     fn v03_cpu_backend_renders_single_image_leaf() {
@@ -1789,5 +2845,145 @@ mod tests {
         ];
         color_matrix_rgba8_premul(&src, &mut dst, zero_a);
         assert_eq!(dst, vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn composite_over_multiply_opaque_is_multiply() {
+        let mut dst = vec![128u8, 128, 128, 255];
+        let src = vec![128u8, 0, 0, 255];
+        composite_over_rgba8_premul(
+            &mut dst,
+            &src,
+            1.0,
+            crate::v03::compile::plan::BlendMode::Multiply,
+        )
+        .unwrap();
+        assert_eq!(dst, vec![64, 0, 0, 255]);
+    }
+
+    #[test]
+    fn composite_crossfade_endpoints() {
+        let a = vec![0u8, 0, 0, 255];
+        let b = vec![255u8, 0, 0, 255];
+
+        let mut dst = vec![0u8; 4];
+        composite_crossfade_over_rgba8_premul(&mut dst, &a, &b, 0.0).unwrap();
+        assert_eq!(dst, a);
+
+        let mut dst = vec![0u8; 4];
+        composite_crossfade_over_rgba8_premul(&mut dst, &a, &b, 1.0).unwrap();
+        assert_eq!(dst, b);
+    }
+
+    #[test]
+    fn composite_wipe_endpoints_hard_edge() {
+        let w = 4u32;
+        let h = 1u32;
+        let a = repeat_px([0u8, 0, 0, 255], w as usize);
+        let b = repeat_px([255u8, 0, 0, 255], w as usize);
+
+        let mut dst = vec![0u8; (w as usize) * 4];
+        composite_wipe_over_rgba8_premul(
+            &mut dst,
+            &a,
+            &b,
+            w,
+            h,
+            0.0,
+            crate::v03::compile::plan::WipeDir::LeftToRight,
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(dst, a);
+
+        let mut dst = vec![0u8; (w as usize) * 4];
+        composite_wipe_over_rgba8_premul(
+            &mut dst,
+            &a,
+            &b,
+            w,
+            h,
+            1.0,
+            crate::v03::compile::plan::WipeDir::LeftToRight,
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(dst, b);
+    }
+
+    #[test]
+    fn composite_slide_endpoints_no_push() {
+        let w = 2u32;
+        let h = 1u32;
+        let mut a = vec![0u8; (w as usize) * 4];
+        a[0..4].copy_from_slice(&[0, 255, 0, 255]);
+        let mut b = vec![0u8; (w as usize) * 4];
+        b[0..4].copy_from_slice(&[255, 0, 0, 255]);
+
+        let mut dst = vec![0u8; (w as usize) * 4];
+        composite_slide_over_rgba8_premul(
+            &mut dst,
+            &a,
+            &b,
+            w,
+            h,
+            0.0,
+            crate::v03::compile::plan::SlideDir::Left,
+            false,
+        )
+        .unwrap();
+        assert_eq!(dst, a);
+
+        let mut dst = vec![0u8; (w as usize) * 4];
+        composite_slide_over_rgba8_premul(
+            &mut dst,
+            &a,
+            &b,
+            w,
+            h,
+            1.0,
+            crate::v03::compile::plan::SlideDir::Left,
+            false,
+        )
+        .unwrap();
+        assert_eq!(dst, b);
+    }
+
+    #[test]
+    fn composite_iris_endpoints_circle() {
+        let w = 3u32;
+        let h = 3u32;
+        let a = repeat_px([0u8, 0, 0, 255], (w * h) as usize);
+        let b = repeat_px([255u8, 0, 0, 255], (w * h) as usize);
+
+        let mut dst = vec![0u8; (w * h * 4) as usize];
+        composite_iris_over_rgba8_premul(
+            &mut dst,
+            &a,
+            &b,
+            w,
+            h,
+            0.0,
+            crate::foundation::core::Vec2 { x: 0.5, y: 0.5 },
+            crate::v03::compile::plan::IrisShape::Circle,
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(dst, a);
+
+        let mut dst = vec![0u8; (w * h * 4) as usize];
+        composite_iris_over_rgba8_premul(
+            &mut dst,
+            &a,
+            &b,
+            w,
+            h,
+            1.0,
+            crate::foundation::core::Vec2 { x: 0.5, y: 0.5 },
+            crate::v03::compile::plan::IrisShape::Circle,
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(dst, b);
     }
 }

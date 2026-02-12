@@ -296,7 +296,7 @@ Goal: pooled execution of DAG plan with parallel scheduling and correct kernels.
 - Single-pass matrix; add correctness tests on small buffers.
 - Validation: canonical verify command set.
 
-- [ ] Commit 6.7: Implement blend/composite ops
+- [x] Commit 6.7: Implement blend/composite ops
 - Implement v0.3 closed blend set.
 - Ensure branch-free inner loops, dispatch outside loops.
 - Validation: canonical verify command set.
