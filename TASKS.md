@@ -222,7 +222,7 @@ Goal: cached Taffy tree with lane-typed style updates and deterministic rect inj
 - Ensure invisible nodes do not influence layout.
 - Validation: canonical verify command set.
 
-- [ ] Commit 4.5: Layout parity tests
+- [x] Commit 4.5: Layout parity tests
 - Add focused tests for flex row/column and simple grid.
 - Validation: canonical verify command set.
 

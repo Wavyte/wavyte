@@ -237,6 +237,28 @@ fn default_flex_shrink() -> AnimDef<f64> {
     AnimDef::Constant(1.0)
 }
 
+impl Default for LayoutPropsDef {
+    fn default() -> Self {
+        Self {
+            display: LayoutDisplayDef::default(),
+            direction: LayoutDirectionDef::default(),
+            wrap: LayoutWrapDef::default(),
+            justify_content: LayoutJustifyContentDef::default(),
+            align_items: LayoutAlignItemsDef::default(),
+            align_content: LayoutAlignContentDef::default(),
+            position: LayoutPositionDef::default(),
+            gap_px: Vec2AnimDef::default(),
+            padding_px: EdgesAnimDef::default(),
+            margin_px: EdgesAnimDef::default(),
+            flex_grow: default_flex_grow(),
+            flex_shrink: default_flex_shrink(),
+            size: SizeDef::default(),
+            min_size: SizeDef::default(),
+            max_size: SizeDef::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LayoutDisplayDef {

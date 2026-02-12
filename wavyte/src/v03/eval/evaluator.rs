@@ -564,8 +564,9 @@ mod tests {
     use crate::v03::expression::compile::compile_expr_program;
     use crate::v03::normalize::pass::normalize;
     use crate::v03::scene::model::{
-        AssetDef, CanvasDef, CollectionModeDef, CompositionDef, EffectInstanceDef, FpsDef, NodeDef,
-        NodeKindDef, TransitionSpecDef,
+        AnimDimensionDef, AssetDef, CanvasDef, CollectionModeDef, CompositionDef,
+        EffectInstanceDef, FpsDef, LayoutJustifyContentDef, LayoutPropsDef, NodeDef, NodeKindDef,
+        SizeDef, TransitionSpecDef,
     };
     use std::collections::BTreeMap;
 
@@ -734,6 +735,476 @@ mod tests {
         assert_eq!(g.groups.len(), 1);
         assert_eq!(g.units.len(), 1);
         assert!(matches!(g.units[0].kind, RenderUnitKind::Group(_)));
+    }
+
+    fn px_size(w: f64, h: f64) -> SizeDef {
+        SizeDef {
+            width: AnimDimensionDef::Px(AnimDef::Constant(w)),
+            height: AnimDimensionDef::Px(AnimDef::Constant(h)),
+        }
+    }
+
+    #[test]
+    fn layout_flex_row_injects_x_translation() {
+        let mut assets = BTreeMap::new();
+        assets.insert("a".to_owned(), AssetDef::Null);
+
+        let child_a = NodeDef {
+            id: "a".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(10.0, 10.0),
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+        let child_b = NodeDef {
+            id: "b".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(20.0, 10.0),
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 100,
+                height: 100,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 10,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Group,
+                    children: vec![child_a, child_b],
+                },
+                range: [0, 10],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                layout: Some(LayoutPropsDef {
+                    size: px_size(100.0, 100.0),
+                    ..Default::default()
+                }),
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let program = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(program);
+        let g = eval.eval_frame(&norm.ir, 0).unwrap();
+
+        let a_idx = *norm
+            .node_idx_by_id
+            .get(&norm.interner.lookup("a").unwrap())
+            .unwrap();
+        let b_idx = *norm
+            .node_idx_by_id
+            .get(&norm.interner.lookup("b").unwrap())
+            .unwrap();
+
+        let a = g.leaves.iter().find(|l| l.node == a_idx).unwrap();
+        let b = g.leaves.iter().find(|l| l.node == b_idx).unwrap();
+
+        let [_aa, _ab, _ac, _ad, ax, _ay] = a.world_transform.as_coeffs();
+        let [_ba, _bb, _bc, _bd, bx, _by] = b.world_transform.as_coeffs();
+
+        assert!((ax - 0.0).abs() < 1e-9);
+        assert!((bx - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn layout_flex_column_injects_y_translation() {
+        let mut assets = BTreeMap::new();
+        assets.insert("a".to_owned(), AssetDef::Null);
+
+        let child_a = NodeDef {
+            id: "a".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(10.0, 10.0),
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+        let child_b = NodeDef {
+            id: "b".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(10.0, 20.0),
+                direction: crate::v03::scene::model::LayoutDirectionDef::Column,
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 100,
+                height: 100,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 10,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Group,
+                    children: vec![child_a, child_b],
+                },
+                range: [0, 10],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                layout: Some(LayoutPropsDef {
+                    direction: crate::v03::scene::model::LayoutDirectionDef::Column,
+                    size: px_size(100.0, 100.0),
+                    ..Default::default()
+                }),
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let program = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(program);
+        let g = eval.eval_frame(&norm.ir, 0).unwrap();
+
+        let a_idx = *norm
+            .node_idx_by_id
+            .get(&norm.interner.lookup("a").unwrap())
+            .unwrap();
+        let b_idx = *norm
+            .node_idx_by_id
+            .get(&norm.interner.lookup("b").unwrap())
+            .unwrap();
+
+        let a = g.leaves.iter().find(|l| l.node == a_idx).unwrap();
+        let b = g.leaves.iter().find(|l| l.node == b_idx).unwrap();
+
+        let [_aa, _ab, _ac, _ad, _ax, ay] = a.world_transform.as_coeffs();
+        let [_ba, _bb, _bc, _bd, _bx, by] = b.world_transform.as_coeffs();
+
+        assert!((ay - 0.0).abs() < 1e-9);
+        assert!((by - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn invisible_nodes_are_display_none_for_layout() {
+        let mut assets = BTreeMap::new();
+        assets.insert("a".to_owned(), AssetDef::Null);
+
+        let child_a = NodeDef {
+            id: "a".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(10.0, 10.0),
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+        let child_b = NodeDef {
+            id: "b".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [10, 20],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(10.0, 10.0),
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+
+        let root_layout = LayoutPropsDef {
+            justify_content: LayoutJustifyContentDef::Center,
+            size: px_size(100.0, 100.0),
+            ..Default::default()
+        };
+
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 100,
+                height: 100,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 20,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Group,
+                    children: vec![child_a, child_b],
+                },
+                range: [0, 20],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                layout: Some(root_layout),
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let program = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(program);
+
+        // Frame 0: only A is visible, so it should be centered as a single item: (100-10)/2 = 45.
+        let g0 = eval.eval_frame(&norm.ir, 0).unwrap();
+        let a_idx = *norm
+            .node_idx_by_id
+            .get(&norm.interner.lookup("a").unwrap())
+            .unwrap();
+        let a0 = g0.leaves.iter().find(|l| l.node == a_idx).unwrap();
+        let [_aa, _ab, _ac, _ad, ax0, _ay0] = a0.world_transform.as_coeffs();
+        assert!((ax0 - 45.0).abs() < 1e-6);
+
+        // Frame 10: only B is visible, so it should also be centered at x=45.
+        let g10 = eval.eval_frame(&norm.ir, 10).unwrap();
+        let b_idx = *norm
+            .node_idx_by_id
+            .get(&norm.interner.lookup("b").unwrap())
+            .unwrap();
+        let b10 = g10.leaves.iter().find(|l| l.node == b_idx).unwrap();
+        let [_ba, _bb, _bc, _bd, bx10, _by10] = b10.world_transform.as_coeffs();
+        assert!((bx10 - 45.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn inactive_switch_child_is_display_none_for_layout() {
+        let mut assets = BTreeMap::new();
+        assets.insert("a".to_owned(), AssetDef::Null);
+
+        let child0 = NodeDef {
+            id: "c0".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(10.0, 10.0),
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+        let child1 = NodeDef {
+            id: "c1".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(10.0, 10.0),
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 100,
+                height: 100,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 10,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Switch {
+                        active: AnimDef::Constant(0),
+                    },
+                    children: vec![child0, child1],
+                },
+                range: [0, 10],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                layout: Some(LayoutPropsDef {
+                    justify_content: LayoutJustifyContentDef::Center,
+                    size: px_size(100.0, 100.0),
+                    ..Default::default()
+                }),
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let program = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(program);
+        let g0 = eval.eval_frame(&norm.ir, 0).unwrap();
+
+        let c0_idx = *norm
+            .node_idx_by_id
+            .get(&norm.interner.lookup("c0").unwrap())
+            .unwrap();
+        let c0 = g0.leaves.iter().find(|l| l.node == c0_idx).unwrap();
+        let [_aa, _ab, _ac, _ad, ax, _ay] = c0.world_transform.as_coeffs();
+        assert!((ax - 45.0).abs() < 1e-6);
+        assert_eq!(g0.leaves.len(), 1);
+    }
+
+    #[test]
+    fn layout_grid_smoke_produces_finite_transforms() {
+        let mut assets = BTreeMap::new();
+        assets.insert("a".to_owned(), AssetDef::Null);
+
+        let child_a = NodeDef {
+            id: "a".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(10.0, 10.0),
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+        let child_b = NodeDef {
+            id: "b".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            layout: Some(LayoutPropsDef {
+                size: px_size(10.0, 10.0),
+                ..Default::default()
+            }),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: None,
+        };
+
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 100,
+                height: 100,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 10,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Group,
+                    children: vec![child_a, child_b],
+                },
+                range: [0, 10],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                layout: Some(LayoutPropsDef {
+                    display: crate::v03::scene::model::LayoutDisplayDef::Grid,
+                    size: px_size(100.0, 100.0),
+                    ..Default::default()
+                }),
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let program = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(program);
+        let g0 = eval.eval_frame(&norm.ir, 0).unwrap();
+        assert_eq!(g0.leaves.len(), 2);
+        for l in &g0.leaves {
+            let [_a, _b, _c, _d, e, f] = l.world_transform.as_coeffs();
+            assert!(e.is_finite() && f.is_finite());
+        }
     }
 
     #[test]
