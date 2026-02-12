@@ -41,6 +41,7 @@ tracing = { version = "0.1", features = ["attributes"] }
 usvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 resvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 vello_cpu = { version = "0.0.6", default-features = false, features = ["std", "text", "u8_pipeline"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["fmt"] }

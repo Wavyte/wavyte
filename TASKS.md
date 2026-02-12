@@ -260,7 +260,7 @@ Goal: deterministic DAG plan, surface lifetimes, fusion and stable fingerprintin
 - Add test that compiles the same frame twice and asserts plan dump equality.
 - Validation: canonical verify command set.
 
-- [ ] Commit 5.7: Implement stable hashing and fingerprinting
+- [x] Commit 5.7: Implement stable hashing and fingerprinting
 - Implement byte-level stable encoding for hashes.
 - Produce `FrameFingerprint` for elision and determinism.
 - Validation: canonical verify command set.
