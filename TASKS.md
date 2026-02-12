@@ -256,7 +256,7 @@ Goal: deterministic DAG plan, surface lifetimes, fusion and stable fingerprintin
 - Identity elimination (blur radius 0, identity matrix, no-op masks).
 - Validation: canonical verify command set.
 
-- [ ] Commit 5.6: Add plan determinism gate
+- [x] Commit 5.6: Add plan determinism gate
 - Add test that compiles the same frame twice and asserts plan dump equality.
 - Validation: canonical verify command set.
 

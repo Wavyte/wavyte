@@ -901,4 +901,86 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn plan_dump_is_deterministic_for_same_frame() {
+        let mut assets = BTreeMap::new();
+        assets.insert("a".to_owned(), AssetDef::Null);
+
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 16,
+                height: 16,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 20,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Group,
+                    children: vec![
+                        NodeDef {
+                            id: "a".to_owned(),
+                            kind: NodeKindDef::Leaf {
+                                asset: "a".to_owned(),
+                            },
+                            range: [0, 10],
+                            transform: Default::default(),
+                            opacity: AnimDef::Constant(1.0),
+                            layout: None,
+                            effects: vec![],
+                            mask: None,
+                            transition_in: Some(TransitionSpecDef {
+                                kind: "crossfade".to_owned(),
+                                duration_frames: 2,
+                                ease: None,
+                                params: BTreeMap::new(),
+                            }),
+                            transition_out: None,
+                        },
+                        NodeDef {
+                            id: "b".to_owned(),
+                            kind: NodeKindDef::Leaf {
+                                asset: "a".to_owned(),
+                            },
+                            range: [2, 12],
+                            transform: Default::default(),
+                            opacity: AnimDef::Constant(1.0),
+                            layout: None,
+                            effects: vec![],
+                            mask: None,
+                            transition_in: None,
+                            transition_out: Some(TransitionSpecDef {
+                                kind: "crossfade".to_owned(),
+                                duration_frames: 2,
+                                ease: None,
+                                params: BTreeMap::new(),
+                            }),
+                        },
+                    ],
+                },
+                range: [0, 20],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                layout: None,
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let program = compile_expr_program(&norm).unwrap();
+        let mut eval = crate::v03::eval::evaluator::Evaluator::new(program);
+        let g = eval.eval_frame(&norm.ir, 2).unwrap();
+
+        let p1 = compile_frame(&norm.ir, g).dump();
+        let p2 = compile_frame(&norm.ir, g).dump();
+        assert_eq!(p1, p2);
+    }
 }
