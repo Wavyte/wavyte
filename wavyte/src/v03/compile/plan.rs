@@ -1,5 +1,6 @@
 use crate::foundation::core::{Affine, Rgba8Premul, Vec2};
-use crate::v03::foundation::ids::NodeIdx;
+use crate::v03::foundation::ids::{AssetIdx, NodeIdx};
+use crate::v03::normalize::ir::ShapeIR;
 use smallvec::SmallVec;
 use std::ops::Range;
 
@@ -101,12 +102,22 @@ pub(crate) enum OpKind {
     /// - Blur, ColorMatrix, DropShadow: `[src]`
     /// - MaskApply: `[src, mask]`
     Pass { fx: PassFx },
+    /// Generate a standalone mask surface from a non-node source (asset or shape).
+    ///
+    /// Used by group masks whose source is `Asset` or `Shape`.
+    MaskGen { source: MaskGenSource },
     /// Composite multiple inputs into output (over + blend modes, paired transitions).
     Composite {
         clear_to_transparent: bool,
         // Boxed to keep `OpKind` size reasonable; composite lists can be large.
         ops: Box<SmallVec<[CompositeOp; 8]>>,
     },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum MaskGenSource {
+    Asset(AssetIdx),
+    Shape(ShapeIR),
 }
 
 #[derive(Debug, Clone)]

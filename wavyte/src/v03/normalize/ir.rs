@@ -34,9 +34,17 @@ pub(crate) struct CompositionIR {
 
     pub(crate) vars: Vec<VarValueIR>,
     pub(crate) assets: Vec<AssetIR>,
+    /// Dense map: `InternId.0 as usize -> Some(AssetIdx)`.
+    ///
+    /// Used in hot paths (compiler) to resolve mask sources without string maps.
+    pub(crate) asset_idx_by_intern: Vec<Option<AssetIdx>>,
 
     pub(crate) nodes: Vec<NodeIR>,
     pub(crate) root: NodeIdx,
+    /// Dense map: `InternId.0 as usize -> Some(NodeIdx)`.
+    ///
+    /// Used in hot paths (compiler) to resolve mask sources without string maps.
+    pub(crate) node_idx_by_intern: Vec<Option<NodeIdx>>,
 
     pub(crate) layout: LayoutIR,
     pub(crate) registries: RegistryBindings,

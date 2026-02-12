@@ -96,6 +96,20 @@ pub(crate) fn normalize(def: &CompositionDef) -> Result<NormalizedComposition, N
 
     let registries = registries_builder.build(&interner);
 
+    let mut asset_idx_by_intern: Vec<Option<AssetIdx>> = vec![None; interner.len()];
+    for (i, &k) in asset_key_by_idx.iter().enumerate() {
+        if let Some(slot) = asset_idx_by_intern.get_mut(k.0 as usize) {
+            *slot = Some(AssetIdx(u32::try_from(i).unwrap()));
+        }
+    }
+
+    let mut node_idx_by_intern: Vec<Option<NodeIdx>> = vec![None; interner.len()];
+    for (i, &id) in node_id_by_idx.iter().enumerate() {
+        if let Some(slot) = node_idx_by_intern.get_mut(id.0 as usize) {
+            *slot = Some(NodeIdx(u32::try_from(i).unwrap()));
+        }
+    }
+
     let ir = CompositionIR {
         canvas: Canvas {
             width: def.canvas.width,
@@ -109,8 +123,10 @@ pub(crate) fn normalize(def: &CompositionDef) -> Result<NormalizedComposition, N
         seed: def.seed,
         vars,
         assets,
+        asset_idx_by_intern,
         nodes,
         root,
+        node_idx_by_intern,
         layout: LayoutIR::default(),
         registries,
     };

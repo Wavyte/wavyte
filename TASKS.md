@@ -240,7 +240,7 @@ Goal: deterministic DAG plan, surface lifetimes, fusion and stable fingerprintin
 - Implement leaf draw op mapping for each asset type.
 - Validation: canonical verify command set.
 
-- [ ] Commit 5.3: Implement mask compilation pipeline
+- [x] Commit 5.3: Implement mask compilation pipeline
 - Compile group masks into mask surfaces and `PassFx::MaskApply` ops.
 - Implement Node/Asset/Shape mask sources.
 - Validation: canonical verify command set.

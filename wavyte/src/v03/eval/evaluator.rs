@@ -23,6 +23,10 @@ pub(crate) struct EvaluatedGraph {
     pub(crate) leaves: Vec<EvaluatedLeaf>,
     pub(crate) groups: Vec<EvaluatedGroup>,
     pub(crate) units: Vec<RenderUnit>,
+    /// Per-node leaf span for this frame (visible subtree only).
+    ///
+    /// For nodes that emit no leaves (or are not visible), the range is `0..0`.
+    pub(crate) node_leaf_ranges: Vec<Range<usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +100,10 @@ enum EvalWork {
     ExitGroup {
         idx: NodeIdx,
     },
+    ExitNode {
+        idx: NodeIdx,
+        start_leaf: usize,
+    },
 }
 
 impl Evaluator {
@@ -113,6 +121,7 @@ impl Evaluator {
                 leaves: Vec::new(),
                 groups: Vec::new(),
                 units: Vec::new(),
+                node_leaf_ranges: Vec::new(),
             },
             group_stack: Vec::with_capacity(8),
             group_frames: Vec::with_capacity(8),
@@ -157,6 +166,8 @@ impl Evaluator {
         self.graph.leaves.clear();
         self.graph.groups.clear();
         self.graph.units.clear();
+        self.graph.node_leaf_ranges.clear();
+        self.graph.node_leaf_ranges.resize(ir.nodes.len(), 0..0);
         self.group_stack.clear();
         self.group_frames.clear();
         self.isolated_group_stack.clear();
@@ -208,6 +219,10 @@ impl Evaluator {
                         }
                     }
                 }
+                EvalWork::ExitNode { idx, start_leaf } => {
+                    self.graph.node_leaf_ranges[idx.0 as usize] =
+                        start_leaf..self.graph.leaves.len();
+                }
                 EvalWork::Enter {
                     idx,
                     parent_world,
@@ -239,6 +254,10 @@ impl Evaluator {
                         * local_affine;
                     let opacity = (parent_opacity * local_opacity).clamp(0.0, 1.0);
 
+                    let start_leaf = self.graph.leaves.len();
+                    // Ensures `node_leaf_ranges[idx]` covers this node’s visible subtree.
+                    self.dfs_stack.push(EvalWork::ExitNode { idx, start_leaf });
+
                     match &node.kind {
                         NodeKindIR::Leaf { asset } => {
                             let leaf_i = self.graph.leaves.len();
@@ -268,7 +287,7 @@ impl Evaluator {
                             ));
                         }
                         NodeKindIR::Collection { mode, children, .. } => {
-                            if matches!(mode, CollectionModeIR::Group) {
+                            if matches!(mode, CollectionModeIR::Group | CollectionModeIR::Stack) {
                                 let isolate = group_requires_isolation(node);
                                 let start_leaf = self.graph.leaves.len();
                                 self.group_stack.push(idx);
