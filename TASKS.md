@@ -313,7 +313,7 @@ Goal: sink-based streaming and audio mixing outside per-frame loop.
 - Implement sink interface and ordering contract.
 - Validation: canonical verify command set.
 
-- [ ] Commit 7.2: Add `FfmpegSink` (video-only)
+- [x] Commit 7.2: Add `FfmpegSink` (video-only)
 - Stream RGBA frames to ffmpeg stdin.
 - Implement flattening fast path and opaque skip path.
 - Validation: canonical verify command set.

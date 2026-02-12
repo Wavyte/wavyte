@@ -2,4 +2,5 @@
 //!
 //! Sinks consume rendered frames in timeline order and are used by `RenderSession::render_range`.
 
+pub(crate) mod ffmpeg;
 pub(crate) mod sink;
