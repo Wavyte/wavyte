@@ -72,7 +72,7 @@ fn try_main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("create out dir '{}'", out_dir.display()))?;
 
-    if !args.no_encode && !wavyte::v03::encode::ffmpeg::is_ffmpeg_on_path() {
+    if !args.no_encode && !wavyte::encode::ffmpeg::is_ffmpeg_on_path() {
         anyhow::bail!("ffmpeg is required for encoding; install it and ensure it's on PATH");
     }
 
@@ -134,11 +134,11 @@ fn run_once(
     let json_bytes = serde_json::to_vec(&json).context("serialize benchmark scene json")?;
 
     let start_new = Instant::now();
-    let comp = wavyte::v03::Composition::from_reader(Cursor::new(json_bytes))?;
-    let mut sess = wavyte::v03::RenderSession::new(
+    let comp = wavyte::Composition::from_reader(Cursor::new(json_bytes))?;
+    let mut sess = wavyte::RenderSession::new(
         &comp,
         repo_root,
-        wavyte::v03::RenderSessionOpts {
+        wavyte::RenderSessionOpts {
             parallel: args.parallel,
             chunk_size: args.chunk_size,
             threads: args.threads,
@@ -165,16 +165,16 @@ fn run_once(
 
     let start_render = Instant::now();
     if args.no_encode {
-        let mut sink = wavyte::v03::InMemorySink::new();
-        let _stats = sess.render_range(range, wavyte::v03::CpuBackendOpts::default(), &mut sink)?;
+        let mut sink = wavyte::InMemorySink::new();
+        let _stats = sess.render_range(range, wavyte::CpuBackendOpts::default(), &mut sink)?;
     } else {
-        let sink_opts = wavyte::v03::FfmpegSinkOpts {
+        let sink_opts = wavyte::FfmpegSinkOpts {
             out_path: out_path.clone(),
             overwrite: true,
             bg_rgba: [0, 0, 0, 255],
         };
-        let mut sink = wavyte::v03::FfmpegSink::new(sink_opts);
-        let _stats = sess.render_range(range, wavyte::v03::CpuBackendOpts::default(), &mut sink)?;
+        let mut sink = wavyte::FfmpegSink::new(sink_opts);
+        let _stats = sess.render_range(range, wavyte::CpuBackendOpts::default(), &mut sink)?;
     }
     let t_render = start_render.elapsed();
 

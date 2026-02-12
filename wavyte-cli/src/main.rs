@@ -76,20 +76,17 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn cmd_frame(args: FrameArgs) -> anyhow::Result<()> {
-    let comp = wavyte::v03::Composition::from_path(&args.in_path)?;
+    let comp = wavyte::Composition::from_path(&args.in_path)?;
     let assets_root = args
         .in_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
 
-    let mut sess = wavyte::v03::RenderSession::new(
-        &comp,
-        assets_root,
-        wavyte::v03::RenderSessionOpts::default(),
-    )?;
+    let mut sess =
+        wavyte::RenderSession::new(&comp, assets_root, wavyte::RenderSessionOpts::default())?;
     let frame = sess.render_frame(
         wavyte::FrameIndex(args.frame),
-        wavyte::v03::CpuBackendOpts::default(),
+        wavyte::CpuBackendOpts::default(),
     )?;
 
     if let Some(parent) = args.out.parent() {
@@ -112,13 +109,13 @@ fn cmd_frame(args: FrameArgs) -> anyhow::Result<()> {
 }
 
 fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
-    let comp = wavyte::v03::Composition::from_path(&args.in_path)?;
+    let comp = wavyte::Composition::from_path(&args.in_path)?;
     let assets_root = args
         .in_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
 
-    let opts = wavyte::v03::RenderSessionOpts {
+    let opts = wavyte::RenderSessionOpts {
         parallel: args.parallel,
         chunk_size: args.chunk_size,
         threads: args.threads,
@@ -126,20 +123,20 @@ fn cmd_render(args: RenderArgs) -> anyhow::Result<()> {
         channel_capacity: 4,
         enable_audio: !args.no_audio,
     };
-    let mut sess = wavyte::v03::RenderSession::new(&comp, assets_root, opts)?;
+    let mut sess = wavyte::RenderSession::new(&comp, assets_root, opts)?;
 
-    let sink_opts = wavyte::v03::FfmpegSinkOpts {
+    let sink_opts = wavyte::FfmpegSinkOpts {
         out_path: args.out.clone(),
         overwrite: args.overwrite,
         bg_rgba: [0, 0, 0, 255],
     };
-    let mut sink = wavyte::v03::FfmpegSink::new(sink_opts);
+    let mut sink = wavyte::FfmpegSink::new(sink_opts);
 
     let range = wavyte::FrameRange::new(
         wavyte::FrameIndex(0),
         wavyte::FrameIndex(comp.duration_frames()),
     )?;
-    let _stats = sess.render_range(range, wavyte::v03::CpuBackendOpts::default(), &mut sink)?;
+    let _stats = sess.render_range(range, wavyte::CpuBackendOpts::default(), &mut sink)?;
 
     eprintln!("wrote {}", args.out.display());
     Ok(())
