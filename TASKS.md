@@ -59,7 +59,7 @@ The repo runs all “CI” locally via scripts in `scripts/` (no GitHub Actions 
   - Add `scripts/` docs in `README.md` for how to use it.
   - Validation: run `bash scripts/verify_release.sh`.
 
-- [ ] Commit 0.3: Add local guard for string maps in hot modules
+- [x] Commit 0.3: Add local guard for string maps in hot modules
   - Add `scripts/forbid_string_maps.sh` that fails if `HashMap<String` or `BTreeMap<String` appears under `wavyte/src/eval`, `wavyte/src/compile`, `wavyte/src/render`.
   - Call it from `scripts/verify_release.sh`.
   - Validation: run `bash scripts/verify_release.sh`.
