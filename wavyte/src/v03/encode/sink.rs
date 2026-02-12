@@ -1,20 +1,30 @@
 use crate::foundation::core::{Fps, FrameIndex};
 use crate::foundation::error::WavyteResult;
 use crate::v03::render::backend::FrameRGBA;
+use std::path::PathBuf;
 
 /// Configuration provided to a [`FrameSink`] at the start of a range render.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct SinkConfig {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) fps: Fps,
+    /// Optional external raw PCM audio file input.
+    pub(crate) audio: Option<AudioInputConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AudioInputConfig {
+    pub(crate) path: PathBuf,
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u16,
 }
 
 /// Sink contract for consuming rendered frames in timeline order.
 ///
 /// Ordering contract: `push_frame` is called in strictly increasing `FrameIndex` order within the
 /// requested render range.
-pub(crate) trait FrameSink {
+pub(crate) trait FrameSink: Send {
     fn begin(&mut self, cfg: SinkConfig) -> WavyteResult<()>;
     fn push_frame(&mut self, idx: FrameIndex, frame: &FrameRGBA) -> WavyteResult<()>;
     fn end(&mut self) -> WavyteResult<()>;
@@ -34,7 +44,7 @@ impl InMemorySink {
     }
 
     pub(crate) fn config(&self) -> Option<SinkConfig> {
-        self.cfg
+        self.cfg.clone()
     }
 }
 

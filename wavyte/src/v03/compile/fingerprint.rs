@@ -3,8 +3,9 @@ use crate::v03::compile::plan::{
     BlendMode, CompositeOp, IrisShape, MaskGenSource, MaskMode, OpKind, PassFx, PixelFormat,
     RenderPlan, SlideDir, SurfaceDesc, SurfaceId, UnitKey, WipeDir,
 };
+use crate::v03::eval::evaluator::{EvaluatedGraph, RenderUnitKind};
 use crate::v03::normalize::intern::InternId;
-use crate::v03::normalize::ir::ShapeIR;
+use crate::v03::normalize::ir::{AssetIR, CompositionIR, ShapeIR, TransitionKindIR};
 use xxhash_rust::xxh3::Xxh3;
 
 const XXH3_SEED: u64 = 0x8b5ad4a0c7d8e9f1;
@@ -12,6 +13,18 @@ const XXH3_SEED: u64 = 0x8b5ad4a0c7d8e9f1;
 pub(crate) fn fingerprint_plan(plan: &RenderPlan) -> FrameFingerprint {
     let mut h = StableHasher::new();
     write_plan(&mut h, plan);
+    h.finish()
+}
+
+/// Compute a stable fingerprint for an evaluated frame.
+///
+/// Used by static-frame elision to skip rendering duplicate evaluated graphs.
+///
+/// Note: the global frame index itself is intentionally *not* hashed, so a still frame can elide
+/// across time.
+pub(crate) fn fingerprint_eval(ir: &CompositionIR, eval: &EvaluatedGraph) -> FrameFingerprint {
+    let mut h = StableHasher::new();
+    write_eval(&mut h, ir, eval);
     h.finish()
 }
 
@@ -78,6 +91,121 @@ fn write_plan(h: &mut StableHasher, plan: &RenderPlan) {
     for r in &plan.roots {
         write_surface_id(h, *r);
     }
+}
+
+fn write_eval(h: &mut StableHasher, ir: &CompositionIR, eval: &EvaluatedGraph) {
+    h.write_u32(eval.leaves.len() as u32);
+    for l in &eval.leaves {
+        h.write_u32(l.node.0);
+        h.write_u32(l.asset.0);
+        // Only time-mapped visual assets should influence static-frame elision via local frame.
+        //
+        // Still assets (solid rect, image, svg, etc) should be eligible for elision even though
+        // their node-local frame increases over time.
+        let include_local_frame = matches!(ir.assets[l.asset.0 as usize], AssetIR::Video { .. });
+        if include_local_frame {
+            h.write_u64(l.local_frame);
+        }
+        for c in l.world_transform.as_coeffs() {
+            h.write_f64(c);
+        }
+        h.write_f32(l.opacity);
+        h.write_u32(l.group_stack.len() as u32);
+        for g in &l.group_stack {
+            h.write_u32(g.0);
+        }
+    }
+
+    h.write_u32(eval.units.len() as u32);
+    for u in &eval.units {
+        match u.kind {
+            RenderUnitKind::Leaf(n) => {
+                h.write_u8(0);
+                h.write_u32(n.0);
+            }
+            RenderUnitKind::Group(n) => {
+                h.write_u8(1);
+                h.write_u32(n.0);
+            }
+        }
+        h.write_u32(u.leaf_range.start as u32);
+        h.write_u32(u.leaf_range.end as u32);
+
+        write_opt_transition(h, u.transition_in.as_ref());
+        write_opt_transition(h, u.transition_out.as_ref());
+    }
+}
+
+fn write_opt_transition(
+    h: &mut StableHasher,
+    t: Option<&crate::v03::eval::evaluator::ResolvedTransition>,
+) {
+    if let Some(t) = t {
+        h.write_u8(1);
+        write_transition_kind(h, t.kind);
+        h.write_f32(t.progress);
+    } else {
+        h.write_u8(0);
+    }
+}
+
+fn write_transition_kind(h: &mut StableHasher, k: TransitionKindIR) {
+    match k {
+        TransitionKindIR::Crossfade => h.write_u8(0),
+        TransitionKindIR::Wipe { dir, soft_edge } => {
+            h.write_u8(1);
+            write_wipe_dir_ir(h, dir);
+            h.write_f32(soft_edge);
+        }
+        TransitionKindIR::Slide { dir, push } => {
+            h.write_u8(2);
+            write_slide_dir_ir(h, dir);
+            h.write_bool(push);
+        }
+        TransitionKindIR::Zoom { origin, from_scale } => {
+            h.write_u8(3);
+            h.write_f64(origin.x);
+            h.write_f64(origin.y);
+            h.write_f32(from_scale);
+        }
+        TransitionKindIR::Iris {
+            origin,
+            shape,
+            soft_edge,
+        } => {
+            h.write_u8(4);
+            h.write_f64(origin.x);
+            h.write_f64(origin.y);
+            write_iris_shape_ir(h, shape);
+            h.write_f32(soft_edge);
+        }
+    }
+}
+
+fn write_wipe_dir_ir(h: &mut StableHasher, d: crate::v03::normalize::ir::WipeDirIR) {
+    h.write_u8(match d {
+        crate::v03::normalize::ir::WipeDirIR::LeftToRight => 0,
+        crate::v03::normalize::ir::WipeDirIR::RightToLeft => 1,
+        crate::v03::normalize::ir::WipeDirIR::TopToBottom => 2,
+        crate::v03::normalize::ir::WipeDirIR::BottomToTop => 3,
+    });
+}
+
+fn write_slide_dir_ir(h: &mut StableHasher, d: crate::v03::normalize::ir::SlideDirIR) {
+    h.write_u8(match d {
+        crate::v03::normalize::ir::SlideDirIR::Left => 0,
+        crate::v03::normalize::ir::SlideDirIR::Right => 1,
+        crate::v03::normalize::ir::SlideDirIR::Up => 2,
+        crate::v03::normalize::ir::SlideDirIR::Down => 3,
+    });
+}
+
+fn write_iris_shape_ir(h: &mut StableHasher, s: crate::v03::normalize::ir::IrisShapeIR) {
+    h.write_u8(match s {
+        crate::v03::normalize::ir::IrisShapeIR::Circle => 0,
+        crate::v03::normalize::ir::IrisShapeIR::Rect => 1,
+        crate::v03::normalize::ir::IrisShapeIR::Diamond => 2,
+    });
 }
 
 fn write_surface_desc(h: &mut StableHasher, s: &SurfaceDesc) {

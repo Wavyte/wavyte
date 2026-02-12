@@ -14,8 +14,6 @@ pub(crate) struct FfmpegSinkOpts {
     pub(crate) overwrite: bool,
     /// Background color used to flatten alpha (RGBA8, straight alpha).
     pub(crate) bg_rgba: [u8; 4],
-    /// Optional external raw PCM audio input fed into ffmpeg.
-    pub(crate) audio: Option<AudioInputConfig>,
 }
 
 impl FfmpegSinkOpts {
@@ -24,19 +22,13 @@ impl FfmpegSinkOpts {
             out_path: out_path.into(),
             overwrite: true,
             bg_rgba: [0, 0, 0, 255],
-            audio: None,
         }
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct AudioInputConfig {
-    pub(crate) path: PathBuf,
-    pub(crate) sample_rate: u32,
-    pub(crate) channels: u16,
-}
-
-/// Video-only v0.3 sink that spawns the system `ffmpeg` and streams raw frames to stdin.
+/// v0.3 sink that spawns the system `ffmpeg` and streams raw frames to stdin.
+///
+/// Audio is optional and provided through `SinkConfig.audio`.
 pub(crate) struct FfmpegSink {
     opts: FfmpegSinkOpts,
 
@@ -119,7 +111,7 @@ impl FrameSink for FfmpegSink {
         push_input_fps(&mut cmd, cfg.fps);
         cmd.args(["-i", "pipe:0"]);
 
-        if let Some(audio) = &self.opts.audio {
+        if let Some(audio) = cfg.audio.as_ref() {
             if audio.sample_rate == 0 {
                 return Err(WavyteError::validation(
                     "audio sample_rate must be non-zero when audio is enabled",
@@ -197,6 +189,7 @@ impl FrameSink for FfmpegSink {
     fn push_frame(&mut self, idx: FrameIndex, frame: &FrameRGBA) -> WavyteResult<()> {
         let cfg = self
             .cfg
+            .as_ref()
             .ok_or_else(|| WavyteError::evaluation("ffmpeg sink not started"))?;
         if let Some(last) = self.last_idx
             && idx.0 <= last.0

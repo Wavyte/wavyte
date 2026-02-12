@@ -328,7 +328,7 @@ Goal: sink-based streaming and audio mixing outside per-frame loop.
 - Ensure ffmpeg spawn and teardown are robust.
 - Validation: canonical verify command set.
 
-- [ ] Commit 7.5: Range render streaming implementation
+- [x] Commit 7.5: Range render streaming implementation
 - Implement `RenderSession::render_range` with:
   - chunking
   - rayon frame-level parallelism
