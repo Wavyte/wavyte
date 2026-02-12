@@ -192,7 +192,7 @@ Goal: allocation-free steady-state evaluation producing `EvaluatedGraph` + `Rend
 - Add registry binding rule: kind->impl lookup is id-indexed.
 - Validation: canonical verify command set.
 
-- [ ] Commit 3.8: Hot-loop allocation gate test (alloc-track)
+- [x] Commit 3.8: Hot-loop allocation gate test (alloc-track)
 - Add a representative scene fixture and a test that asserts 0 allocations per frame after warmup.
 - Validation: canonical verify command set.
 

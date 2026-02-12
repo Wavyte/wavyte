@@ -12,6 +12,8 @@ pub(crate) struct VisibilityState {
     pub(crate) node_visible: Vec<bool>,
     /// Only meaningful for `Switch` nodes.
     pub(crate) switch_active_child: Vec<Option<NodeIdx>>,
+    // Scratch DFS stack reused per frame (hot-path allocation avoidance).
+    stack: Vec<(NodeIdx, bool)>,
 }
 
 pub(crate) fn compute_visibility(
@@ -26,10 +28,10 @@ pub(crate) fn compute_visibility(
     out.switch_active_child.clear();
     out.switch_active_child.resize(n, None);
 
-    let mut stack: Vec<(NodeIdx, bool)> = Vec::with_capacity(64);
-    stack.push((ir.root, true));
+    out.stack.clear();
+    out.stack.push((ir.root, true));
 
-    while let Some((idx, parent_visible)) = stack.pop() {
+    while let Some((idx, parent_visible)) = out.stack.pop() {
         let t = time_ctxs
             .get(idx.0 as usize)
             .copied()
@@ -46,7 +48,7 @@ pub(crate) fn compute_visibility(
         match mode {
             CollectionModeIR::Group | CollectionModeIR::Stack | CollectionModeIR::Sequence => {
                 for &c in children.iter().rev() {
-                    stack.push((c, visible_here));
+                    out.stack.push((c, visible_here));
                 }
             }
             CollectionModeIR::Switch => {
@@ -60,7 +62,7 @@ pub(crate) fn compute_visibility(
                 out.switch_active_child[idx.0 as usize] = active_child;
 
                 for &c in children.iter().rev() {
-                    stack.push((c, visible_here && Some(c) == active_child));
+                    out.stack.push((c, visible_here && Some(c) == active_child));
                 }
             }
         }

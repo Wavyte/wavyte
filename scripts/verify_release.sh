@@ -21,6 +21,9 @@ cargo clippy --workspace --all-targets --all-features --release -- -D warnings
 echo "[verify_release] cargo test (release)"
 cargo test --workspace --all-features --release
 
+echo "[verify_release] alloc gate (ignored, single-thread)"
+cargo test -p wavyte --all-features --release v03_eval_alloc_free_after_warmup -- --ignored --test-threads=1
+
 echo "[verify_release] cargo doc"
 cargo doc --workspace --all-features --no-deps
 

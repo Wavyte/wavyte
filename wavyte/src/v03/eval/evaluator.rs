@@ -73,6 +73,8 @@ pub(crate) struct Evaluator {
     group_stack: Vec<NodeIdx>,
     group_frames: Vec<GroupFrame>,
     isolated_group_stack: Vec<NodeIdx>,
+
+    dfs_stack: Vec<EvalWork>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,6 +82,18 @@ struct GroupFrame {
     idx: NodeIdx,
     start_leaf: usize,
     isolate: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EvalWork {
+    Enter {
+        idx: NodeIdx,
+        parent_world: Affine,
+        parent_opacity: f64,
+    },
+    ExitGroup {
+        idx: NodeIdx,
+    },
 }
 
 impl Evaluator {
@@ -100,6 +114,7 @@ impl Evaluator {
             group_stack: Vec::with_capacity(8),
             group_frames: Vec::with_capacity(8),
             isolated_group_stack: Vec::with_capacity(4),
+            dfs_stack: Vec::with_capacity(64),
         }
     }
 
@@ -127,6 +142,7 @@ impl Evaluator {
         self.group_stack.clear();
         self.group_frames.clear();
         self.isolated_group_stack.clear();
+        self.dfs_stack.clear();
 
         self.dfs_emit_leaves(ir)?;
 
@@ -134,28 +150,16 @@ impl Evaluator {
     }
 
     fn dfs_emit_leaves(&mut self, ir: &CompositionIR) -> Result<(), VmError> {
-        #[derive(Clone, Copy)]
-        enum Work {
-            Enter {
-                idx: NodeIdx,
-                parent_world: Affine,
-                parent_opacity: f64,
-            },
-            ExitGroup {
-                idx: NodeIdx,
-            },
-        }
-
-        let mut stack: Vec<Work> = Vec::with_capacity(64);
-        stack.push(Work::Enter {
+        self.dfs_stack.clear();
+        self.dfs_stack.push(EvalWork::Enter {
             idx: ir.root,
             parent_world: Affine::IDENTITY,
             parent_opacity: 1.0,
         });
 
-        while let Some(w) = stack.pop() {
+        while let Some(w) = self.dfs_stack.pop() {
             match w {
-                Work::ExitGroup { idx: _ } => {
+                EvalWork::ExitGroup { idx: _ } => {
                     let frame = self
                         .group_frames
                         .pop()
@@ -186,7 +190,7 @@ impl Evaluator {
                         }
                     }
                 }
-                Work::Enter {
+                EvalWork::Enter {
                     idx,
                     parent_world,
                     parent_opacity,
@@ -250,14 +254,14 @@ impl Evaluator {
                                 if isolate {
                                     self.isolated_group_stack.push(idx);
                                 }
-                                stack.push(Work::ExitGroup { idx });
+                                self.dfs_stack.push(EvalWork::ExitGroup { idx });
                             }
 
                             match mode {
                                 CollectionModeIR::Switch => {
                                     let active = self.vis.switch_active_child[idx.0 as usize];
                                     if let Some(c) = active {
-                                        stack.push(Work::Enter {
+                                        self.dfs_stack.push(EvalWork::Enter {
                                             idx: c,
                                             parent_world: world,
                                             parent_opacity: opacity,
@@ -268,7 +272,7 @@ impl Evaluator {
                                     // Push in reverse to preserve painter-order traversal.
                                     for &c in children.iter().rev() {
                                         if self.vis.node_visible[c.0 as usize] {
-                                            stack.push(Work::Enter {
+                                            self.dfs_stack.push(EvalWork::Enter {
                                                 idx: c,
                                                 parent_world: world,
                                                 parent_opacity: opacity,
@@ -528,6 +532,8 @@ fn local_affine_from_components(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "alloc-track")]
+    use crate::foundation::alloc_track::AllocRegion;
     use crate::v03::animation::anim::{AnimDef, AnimTaggedDef};
     use crate::v03::expression::compile::compile_expr_program;
     use crate::v03::normalize::pass::normalize;
@@ -785,5 +791,95 @@ mod tests {
             g7.units.iter().any(|u| u.transition_out.is_some())
                 && g7.units.iter().any(|u| u.transition_in.is_some())
         );
+    }
+
+    #[cfg(feature = "alloc-track")]
+    #[test]
+    #[ignore = "alloc gate; run via scripts/verify_release.sh with --ignored and --test-threads=1"]
+    fn v03_eval_alloc_free_after_warmup() {
+        let mut assets = BTreeMap::new();
+        assets.insert("a".to_owned(), AssetDef::Null);
+
+        let a = NodeDef {
+            id: "a".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            effects: vec![],
+            mask: None,
+            transition_in: None,
+            transition_out: Some(TransitionSpecDef {
+                kind: "fade".to_owned(),
+                duration_frames: 3,
+                ease: None,
+                params: BTreeMap::new(),
+            }),
+        };
+        let b = NodeDef {
+            id: "b".to_owned(),
+            kind: NodeKindDef::Leaf {
+                asset: "a".to_owned(),
+            },
+            range: [0, 10],
+            transform: Default::default(),
+            opacity: AnimDef::Constant(1.0),
+            effects: vec![],
+            mask: None,
+            transition_in: Some(TransitionSpecDef {
+                kind: "fade".to_owned(),
+                duration_frames: 3,
+                ease: None,
+                params: BTreeMap::new(),
+            }),
+            transition_out: None,
+        };
+
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 1,
+                height: 1,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 17,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Sequence,
+                    children: vec![a, b],
+                },
+                range: [0, 17],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let program = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(program);
+
+        // Warm up with a frame that produces the max output (overlap window).
+        let _ = eval.eval_frame(&norm.ir, 7).unwrap();
+
+        let region = AllocRegion::new();
+        let _ = region.change(); // reset baseline
+
+        for f in 0..34u64 {
+            let _ = eval.eval_frame(&norm.ir, f % 17).unwrap();
+            let s = region.change();
+            assert_eq!(s.allocations, 0, "allocations: {s:?}");
+            assert_eq!(s.reallocations, 0, "reallocations: {s:?}");
+            assert_eq!(s.deallocations, 0, "deallocations: {s:?}");
+        }
     }
 }
