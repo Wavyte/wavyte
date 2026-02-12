@@ -909,6 +909,106 @@ impl CpuBackendV03 {
         Ok(())
     }
 
+    fn exec_mask_apply_pass(
+        &mut self,
+        mode: crate::v03::compile::plan::MaskMode,
+        inverted: bool,
+        surfaces: &mut ExecSurfaces<'_>,
+        inputs: &SmallVec<[SurfaceId; 4]>,
+        out: SurfaceId,
+    ) -> WavyteResult<()> {
+        if inputs.len() != 2 {
+            return Err(WavyteError::evaluation(
+                "MaskApply pass expects 2 input surfaces",
+            ));
+        }
+        let src_id = inputs[0];
+        let mask_id = inputs[1];
+
+        let desc = surfaces.desc(out);
+        surfaces.ensure(out, desc)?;
+        let expected = (desc.width as usize)
+            .saturating_mul(desc.height as usize)
+            .saturating_mul(4);
+
+        let src_i = src_id.0 as usize;
+        let mask_i = mask_id.0 as usize;
+        let dst_i = out.0 as usize;
+
+        // Typical case: distinct output surface. Use slice splitting to avoid borrow conflicts
+        // without copying full buffers.
+        if dst_i != src_i && dst_i != mask_i {
+            let (left, at_and_right) = surfaces.pixmaps.split_at_mut(dst_i);
+            let (dst_slot, right) = at_and_right
+                .split_first_mut()
+                .ok_or_else(|| WavyteError::evaluation("MaskApply output index OOB"))?;
+
+            let get_ref = |i: usize| -> Option<&Option<vello_cpu::Pixmap>> {
+                if i < dst_i {
+                    left.get(i)
+                } else if i == dst_i {
+                    None
+                } else {
+                    right.get(i - dst_i - 1)
+                }
+            };
+
+            let src_pm = get_ref(src_i)
+                .and_then(|x| x.as_ref())
+                .ok_or_else(|| WavyteError::evaluation("MaskApply src surface missing"))?;
+            let mask_pm = get_ref(mask_i)
+                .and_then(|x| x.as_ref())
+                .ok_or_else(|| WavyteError::evaluation("MaskApply mask surface missing"))?;
+            let dst_pm = dst_slot
+                .as_mut()
+                .ok_or_else(|| WavyteError::evaluation("MaskApply output surface missing"))?;
+
+            let src = src_pm.data_as_u8_slice();
+            let mask = mask_pm.data_as_u8_slice();
+            let dst = dst_pm.data_as_u8_slice_mut();
+            if src.len() != expected || mask.len() != expected || dst.len() != expected {
+                return Err(WavyteError::evaluation(
+                    "MaskApply surface buffer size mismatch",
+                ));
+            }
+
+            mask_apply_rgba8_premul(src, mask, dst, mode, inverted);
+            return Ok(());
+        }
+
+        // Fallback for aliasing cases after surface canonicalization: copy inputs into scratch.
+        self.blur_scratch_a.resize(expected, 0);
+        self.blur_scratch_b.resize(expected, 0);
+        {
+            let src_pm = surfaces
+                .pixmaps
+                .get(src_i)
+                .and_then(|x| x.as_ref())
+                .ok_or_else(|| WavyteError::evaluation("MaskApply src surface missing"))?;
+            let mask_pm = surfaces
+                .pixmaps
+                .get(mask_i)
+                .and_then(|x| x.as_ref())
+                .ok_or_else(|| WavyteError::evaluation("MaskApply mask surface missing"))?;
+            self.blur_scratch_a
+                .copy_from_slice(src_pm.data_as_u8_slice());
+            self.blur_scratch_b
+                .copy_from_slice(mask_pm.data_as_u8_slice());
+        }
+        let dst_pm = surfaces.pixmaps[dst_i]
+            .as_mut()
+            .ok_or_else(|| WavyteError::evaluation("MaskApply output surface missing"))?;
+        let dst = dst_pm.data_as_u8_slice_mut();
+        mask_apply_rgba8_premul(
+            &self.blur_scratch_a,
+            &self.blur_scratch_b,
+            dst,
+            mode,
+            inverted,
+        );
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_leaves_to(
         &mut self,
@@ -993,6 +1093,17 @@ impl RenderBackendV03 for CpuBackendV03 {
                     fx: crate::v03::compile::plan::PassFx::Blur { radius_px, sigma },
                 } => {
                     self.exec_blur_pass(*radius_px, *sigma, &mut surfaces, &op.inputs, op.output)?;
+                }
+                OpKind::Pass {
+                    fx: crate::v03::compile::plan::PassFx::MaskApply { mode, inverted },
+                } => {
+                    self.exec_mask_apply_pass(
+                        *mode,
+                        *inverted,
+                        &mut surfaces,
+                        &op.inputs,
+                        op.output,
+                    )?;
                 }
                 other => {
                     return Err(WavyteError::evaluation(format!(
@@ -1297,6 +1408,79 @@ fn q16_to_u8(acc: u64) -> u8 {
     (v.min(255)) as u8
 }
 
+fn mask_apply_rgba8_premul(
+    src: &[u8],
+    mask: &[u8],
+    dst: &mut [u8],
+    mode: crate::v03::compile::plan::MaskMode,
+    inverted: bool,
+) {
+    debug_assert_eq!(src.len(), mask.len());
+    debug_assert_eq!(src.len(), dst.len());
+
+    match mode {
+        crate::v03::compile::plan::MaskMode::Alpha => {
+            for ((s, m), d) in src
+                .chunks_exact(4)
+                .zip(mask.chunks_exact(4))
+                .zip(dst.chunks_exact_mut(4))
+            {
+                let mut w = m[3];
+                if inverted {
+                    w = 255 - w;
+                }
+                let w16 = u16::from(w);
+                d[0] = mul_div255_u8(u16::from(s[0]), w16);
+                d[1] = mul_div255_u8(u16::from(s[1]), w16);
+                d[2] = mul_div255_u8(u16::from(s[2]), w16);
+                d[3] = mul_div255_u8(u16::from(s[3]), w16);
+            }
+        }
+        crate::v03::compile::plan::MaskMode::Luma => {
+            for ((s, m), d) in src
+                .chunks_exact(4)
+                .zip(mask.chunks_exact(4))
+                .zip(dst.chunks_exact_mut(4))
+            {
+                let r = u16::from(m[0]);
+                let g = u16::from(m[1]);
+                let b = u16::from(m[2]);
+                let luma = ((r * 54 + g * 183 + b * 19 + 128) >> 8) as u8;
+                let mut w = luma;
+                if inverted {
+                    w = 255 - w;
+                }
+                let w16 = u16::from(w);
+                d[0] = mul_div255_u8(u16::from(s[0]), w16);
+                d[1] = mul_div255_u8(u16::from(s[1]), w16);
+                d[2] = mul_div255_u8(u16::from(s[2]), w16);
+                d[3] = mul_div255_u8(u16::from(s[3]), w16);
+            }
+        }
+        crate::v03::compile::plan::MaskMode::Stencil { threshold } => {
+            let t = (threshold.clamp(0.0, 1.0) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+            for ((s, m), d) in src
+                .chunks_exact(4)
+                .zip(mask.chunks_exact(4))
+                .zip(dst.chunks_exact_mut(4))
+            {
+                let a = m[3];
+                let mut w = if a >= t { 255u8 } else { 0u8 };
+                if inverted {
+                    w = 255 - w;
+                }
+                let w16 = u16::from(w);
+                d[0] = mul_div255_u8(u16::from(s[0]), w16);
+                d[1] = mul_div255_u8(u16::from(s[1]), w16);
+                d[2] = mul_div255_u8(u16::from(s[2]), w16);
+                d[3] = mul_div255_u8(u16::from(s[3]), w16);
+            }
+        }
+    }
+}
+
 fn premul_over_in_place(dst: &mut [u8], src: &[u8]) -> WavyteResult<()> {
     if dst.len() != src.len() || !dst.len().is_multiple_of(4) {
         return Err(WavyteError::evaluation(
@@ -1447,5 +1631,50 @@ mod tests {
         let k = gaussian_kernel_q16(2, 1.0).unwrap();
         blur_rgba8_premul_q16(&src, &mut dst, &mut tmp, w, h, &k);
         assert_eq!(src, dst);
+    }
+
+    #[test]
+    fn mask_apply_alpha_scales_src_by_mask_alpha() {
+        let src = vec![10u8, 20, 30, 40];
+        let mask = vec![0u8, 0, 0, 128];
+        let mut dst = vec![0u8; 4];
+        mask_apply_rgba8_premul(
+            &src,
+            &mask,
+            &mut dst,
+            crate::v03::compile::plan::MaskMode::Alpha,
+            false,
+        );
+        let w = 128u16;
+        assert_eq!(dst[0], mul_div255_u8(u16::from(10u8), w));
+        assert_eq!(dst[1], mul_div255_u8(u16::from(20u8), w));
+        assert_eq!(dst[2], mul_div255_u8(u16::from(30u8), w));
+        assert_eq!(dst[3], mul_div255_u8(u16::from(40u8), w));
+    }
+
+    #[test]
+    fn mask_apply_stencil_threshold_selects_all_or_nothing() {
+        let src = vec![10u8, 20, 30, 200];
+        let mask_lo = vec![0u8, 0, 0, 100];
+        let mask_hi = vec![0u8, 0, 0, 200];
+        let mut dst = vec![0u8; 4];
+
+        mask_apply_rgba8_premul(
+            &src,
+            &mask_lo,
+            &mut dst,
+            crate::v03::compile::plan::MaskMode::Stencil { threshold: 0.5 },
+            false,
+        );
+        assert_eq!(dst, vec![0, 0, 0, 0]);
+
+        mask_apply_rgba8_premul(
+            &src,
+            &mask_hi,
+            &mut dst,
+            crate::v03::compile::plan::MaskMode::Stencil { threshold: 0.5 },
+            false,
+        );
+        assert_eq!(dst, src);
     }
 }

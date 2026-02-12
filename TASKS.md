@@ -288,7 +288,7 @@ Goal: pooled execution of DAG plan with parallel scheduling and correct kernels.
 - Separable gaussian; test endpoints and invariants.
 - Validation: canonical verify command set.
 
-- [ ] Commit 6.5: Implement mask apply kernel
+- [x] Commit 6.5: Implement mask apply kernel
 - Alpha/luma/stencil modes, mode-selected function outside pixel loop.
 - Validation: canonical verify command set.
 
