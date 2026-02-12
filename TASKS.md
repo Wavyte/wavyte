@@ -91,7 +91,7 @@ Goal: land the boundary/runtime split and build deterministic `CompositionIR` wi
 - Add deterministic ordering rules for ids and property ids.
 - Validation: canonical verify command set.
 
-Commit 1.4: Add boundary serde model (`scene/model.rs`)
+- [x] Commit 1.4: Add boundary serde model (`scene/model.rs`)
 - Implement boundary structs for `Composition`, `Node`, `NodeKind`, `CollectionMode`, `MaskDef`, `AssetDef`, `LayoutProps`.
 - Implement shorthand deserialization for `Anim<T>` and transforms/effects.
 - Validation: canonical verify command set.
