@@ -245,7 +245,7 @@ Goal: deterministic DAG plan, surface lifetimes, fusion and stable fingerprintin
 - Implement Node/Asset/Shape mask sources.
 - Validation: canonical verify command set.
 
-- [ ] Commit 5.4: Implement transition pairing at unit level
+- [x] Commit 5.4: Implement transition pairing at unit level
 - Implement pairing heuristic and fixed tolerance constants.
 - Add determinism tests for paired vs unpaired behavior.
 - Validation: canonical verify command set.

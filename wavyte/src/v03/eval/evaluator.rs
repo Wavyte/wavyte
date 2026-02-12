@@ -9,9 +9,9 @@ use crate::v03::expression::program::ExprProgram;
 use crate::v03::expression::vm::VmError;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx};
 use crate::v03::layout::taffy_bridge::TaffyBridge;
-use crate::v03::normalize::intern::InternId;
 use crate::v03::normalize::ir::{
-    CollectionModeIR, CompositionIR, NodeIR, NodeKindIR, NodePropsIR, TransitionSpecIR,
+    CollectionModeIR, CompositionIR, NodeIR, NodeKindIR, NodePropsIR, TransitionKindIR,
+    TransitionSpecIR,
 };
 use crate::v03::normalize::property::PropertyKey;
 use smallvec::SmallVec;
@@ -60,7 +60,7 @@ pub(crate) struct RenderUnit {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ResolvedTransition {
-    pub(crate) kind: InternId,
+    pub(crate) kind: TransitionKindIR,
     pub(crate) progress: f32, // eased, in [0, 1]
 }
 
@@ -1244,7 +1244,7 @@ mod tests {
             mask: None,
             transition_in: None,
             transition_out: Some(TransitionSpecDef {
-                kind: "fade".to_owned(),
+                kind: "crossfade".to_owned(),
                 duration_frames: 3,
                 ease: None,
                 params: BTreeMap::new(),
@@ -1263,7 +1263,7 @@ mod tests {
             effects: vec![],
             mask: None,
             transition_in: Some(TransitionSpecDef {
-                kind: "fade".to_owned(),
+                kind: "crossfade".to_owned(),
                 duration_frames: 3,
                 ease: None,
                 params: BTreeMap::new(),
@@ -1339,7 +1339,7 @@ mod tests {
             mask: None,
             transition_in: None,
             transition_out: Some(TransitionSpecDef {
-                kind: "fade".to_owned(),
+                kind: "crossfade".to_owned(),
                 duration_frames: 3,
                 ease: None,
                 params: BTreeMap::new(),
@@ -1357,7 +1357,7 @@ mod tests {
             effects: vec![],
             mask: None,
             transition_in: Some(TransitionSpecDef {
-                kind: "fade".to_owned(),
+                kind: "crossfade".to_owned(),
                 duration_frames: 3,
                 ease: None,
                 params: BTreeMap::new(),

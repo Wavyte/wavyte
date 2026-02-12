@@ -9,10 +9,11 @@ use crate::v03::foundation::ids::{EffectKindId, ParamId};
 use crate::v03::normalize::intern::{InternId, StringInterner};
 use crate::v03::normalize::ir::{
     AnimDimensionIR, AssetIR, CollectionModeIR, CompositionIR, EdgesAnimIR, ExprSourceIR,
-    LayoutAlignContentIR, LayoutAlignItemsIR, LayoutDirectionIR, LayoutDisplayIR, LayoutIR,
-    LayoutJustifyContentIR, LayoutPositionIR, LayoutPropsIR, LayoutWrapIR, MaskIR, MaskModeIR,
-    MaskSourceIR, NodeIR, NodeKindIR, NodePropsIR, NormalizedComposition, RegistryBindings,
-    ShapeIR, SizeAnimIR, TransitionSpecIR, ValueTypeIR, VarValueIR,
+    IrisShapeIR, LayoutAlignContentIR, LayoutAlignItemsIR, LayoutDirectionIR, LayoutDisplayIR,
+    LayoutIR, LayoutJustifyContentIR, LayoutPositionIR, LayoutPropsIR, LayoutWrapIR, MaskIR,
+    MaskModeIR, MaskSourceIR, NodeIR, NodeKindIR, NodePropsIR, NormalizedComposition,
+    RegistryBindings, ShapeIR, SizeAnimIR, SlideDirIR, TransitionKindIR, TransitionSpecIR,
+    ValueTypeIR, VarValueIR, WipeDirIR,
 };
 use crate::v03::normalize::property::{PropertyIndex, PropertyKey};
 use crate::v03::scene::model::{
@@ -298,14 +299,8 @@ fn normalize_node(
         .map(|e| normalize_effect(e, interner, registries))
         .collect();
     let mask = node.mask.as_ref().map(|m| normalize_mask(m, interner));
-    let transition_in = node
-        .transition_in
-        .as_ref()
-        .map(|t| normalize_transition(t, interner));
-    let transition_out = node
-        .transition_out
-        .as_ref()
-        .map(|t| normalize_transition(t, interner));
+    let transition_in = node.transition_in.as_ref().map(normalize_transition);
+    let transition_out = node.transition_out.as_ref().map(normalize_transition);
 
     // Push a placeholder so children can allocate stable indices.
     nodes.push(NodeIR {
@@ -503,8 +498,7 @@ fn normalize_effect(
     EffectBindingIR { kind, params }
 }
 
-fn normalize_transition(t: &TransitionSpecDef, interner: &mut StringInterner) -> TransitionSpecIR {
-    let kind = interner.intern(&t.kind);
+fn normalize_transition(t: &TransitionSpecDef) -> TransitionSpecIR {
     let ease = match t.ease.as_deref() {
         None => InterpMode::Linear,
         Some("hold") => InterpMode::Hold,
@@ -516,17 +510,113 @@ fn normalize_transition(t: &TransitionSpecDef, interner: &mut StringInterner) ->
         Some("bounce_out") => InterpMode::BounceOut,
         Some(_other) => InterpMode::Linear,
     };
-    let params = t
-        .params
-        .iter()
-        .map(|(k, v)| (interner.intern(k), v.clone()))
-        .collect();
+    let kind_str = t.kind.trim().to_ascii_lowercase();
+    let kind = match kind_str.as_str() {
+        "crossfade" => TransitionKindIR::Crossfade,
+        "wipe" => TransitionKindIR::Wipe {
+            dir: parse_wipe_dir(t.params.get("dir").and_then(|v| v.as_str())),
+            soft_edge: parse_soft_edge(t.params.get("soft_edge").and_then(|v| v.as_f64())),
+        },
+        "slide" => TransitionKindIR::Slide {
+            dir: parse_slide_dir(t.params.get("dir").and_then(|v| v.as_str())),
+            push: t
+                .params
+                .get("push")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        },
+        "zoom" => TransitionKindIR::Zoom {
+            origin: parse_vec2(t.params.get("origin"))
+                .unwrap_or(crate::foundation::core::Vec2::new(0.5, 0.5)),
+            from_scale: t
+                .params
+                .get("from_scale")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.9)
+                .clamp(0.0, 1000.0) as f32,
+        },
+        "iris" => TransitionKindIR::Iris {
+            origin: parse_vec2(t.params.get("origin"))
+                .unwrap_or(crate::foundation::core::Vec2::new(0.5, 0.5)),
+            shape: parse_iris_shape(t.params.get("shape").and_then(|v| v.as_str())),
+            soft_edge: parse_soft_edge(t.params.get("soft_edge").and_then(|v| v.as_f64())),
+        },
+        _ => TransitionKindIR::Crossfade,
+    };
     TransitionSpecIR {
         kind,
         duration_frames: t.duration_frames,
         ease,
-        params,
     }
+}
+
+fn parse_wipe_dir(s: Option<&str>) -> WipeDirIR {
+    match s.map(|x| x.trim().to_ascii_lowercase()) {
+        None => WipeDirIR::LeftToRight,
+        Some(s) => match s.as_str() {
+            "left_to_right" | "lefttoright" | "ltr" => WipeDirIR::LeftToRight,
+            "right_to_left" | "righttoleft" | "rtl" => WipeDirIR::RightToLeft,
+            "top_to_bottom" | "toptobottom" | "ttb" => WipeDirIR::TopToBottom,
+            "bottom_to_top" | "bottomtotop" | "btt" => WipeDirIR::BottomToTop,
+            _ => WipeDirIR::LeftToRight,
+        },
+    }
+}
+
+fn parse_slide_dir(s: Option<&str>) -> SlideDirIR {
+    match s.map(|x| x.trim().to_ascii_lowercase()) {
+        None => SlideDirIR::Left,
+        Some(s) => match s.as_str() {
+            "left" => SlideDirIR::Left,
+            "right" => SlideDirIR::Right,
+            "up" => SlideDirIR::Up,
+            "down" => SlideDirIR::Down,
+            _ => SlideDirIR::Left,
+        },
+    }
+}
+
+fn parse_iris_shape(s: Option<&str>) -> IrisShapeIR {
+    match s.map(|x| x.trim().to_ascii_lowercase()) {
+        None => IrisShapeIR::Circle,
+        Some(s) => match s.as_str() {
+            "circle" => IrisShapeIR::Circle,
+            "rect" | "rectangle" => IrisShapeIR::Rect,
+            "diamond" => IrisShapeIR::Diamond,
+            _ => IrisShapeIR::Circle,
+        },
+    }
+}
+
+fn parse_soft_edge(v: Option<f64>) -> f32 {
+    match v {
+        None => 0.0,
+        Some(v) => {
+            let f = v as f32;
+            if !f.is_finite() {
+                0.0
+            } else {
+                f.clamp(0.0, 1.0)
+            }
+        }
+    }
+}
+
+fn parse_vec2(v: Option<&serde_json::Value>) -> Option<crate::foundation::core::Vec2> {
+    let v = v?;
+    if let Some(arr) = v.as_array()
+        && arr.len() == 2
+    {
+        let x = arr[0].as_f64()?;
+        let y = arr[1].as_f64()?;
+        return Some(crate::foundation::core::Vec2::new(x, y));
+    }
+    if let Some(obj) = v.as_object() {
+        let x = obj.get("x")?.as_f64()?;
+        let y = obj.get("y")?.as_f64()?;
+        return Some(crate::foundation::core::Vec2::new(x, y));
+    }
+    None
 }
 
 fn normalize_mask(m: &MaskDef, interner: &mut StringInterner) -> MaskIR {

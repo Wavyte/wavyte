@@ -1,5 +1,5 @@
 use crate::foundation::core::Rgba8Premul;
-use crate::foundation::core::{Canvas, Fps};
+use crate::foundation::core::{Canvas, Fps, Vec2};
 use crate::v03::animation::anim::Anim;
 use crate::v03::animation::anim::InterpMode;
 use crate::v03::effects::binding::EffectBindingIR;
@@ -327,12 +327,56 @@ pub(crate) enum MaskModeIR {
     Stencil { threshold: f32 },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum TransitionKindIR {
+    Crossfade,
+    Wipe {
+        dir: WipeDirIR,
+        soft_edge: f32, // 0..1
+    },
+    Slide {
+        dir: SlideDirIR,
+        push: bool,
+    },
+    Zoom {
+        origin: Vec2,
+        from_scale: f32,
+    },
+    Iris {
+        origin: Vec2,
+        shape: IrisShapeIR,
+        soft_edge: f32, // 0..1
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WipeDirIR {
+    LeftToRight,
+    RightToLeft,
+    TopToBottom,
+    BottomToTop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlideDirIR {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IrisShapeIR {
+    Circle,
+    Rect,
+    Diamond,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TransitionSpecIR {
-    pub(crate) kind: InternId,
+    pub(crate) kind: TransitionKindIR,
     pub(crate) duration_frames: u32,
     pub(crate) ease: InterpMode,
-    pub(crate) params: Vec<(InternId, JsonValue)>,
 }
 
 // Effects are bound during normalization to avoid any runtime param-name lookups.

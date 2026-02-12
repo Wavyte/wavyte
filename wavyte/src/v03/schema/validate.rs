@@ -333,6 +333,15 @@ fn validate_transition_spec(
             &[base_path.as_slice(), &[SchemaPathElem::Field("kind")]].concat(),
             "transition kind must be non-empty",
         ));
+    } else {
+        let k = t.kind.trim().to_ascii_lowercase();
+        let ok = matches!(k.as_str(), "crossfade" | "wipe" | "slide" | "zoom" | "iris");
+        if !ok {
+            errors.push(SchemaError::at(
+                &[base_path.as_slice(), &[SchemaPathElem::Field("kind")]].concat(),
+                format!("unknown transition kind \"{}\"", t.kind),
+            ));
+        }
     }
 
     if let Some(e) = t.ease.as_deref() {
