@@ -11,8 +11,8 @@ use crate::foundation::math::Fnv1a64;
 use crate::layout::RectPx;
 use crate::layout::taffy_bridge::TaffyBridge;
 use crate::normalize::ir::{
-    CollectionModeIR, CompositionIR, NodeIR, NodeKindIR, NodePropsIR, TransitionKindIR,
-    TransitionSpecIR,
+    BlendModeIR, CollectionModeIR, CompositionIR, NodeIR, NodeKindIR, NodePropsIR,
+    TransitionKindIR, TransitionSpecIR,
 };
 use crate::normalize::property::PropertyKey;
 use smallvec::SmallVec;
@@ -61,6 +61,7 @@ pub(crate) enum RenderUnitKind {
 pub(crate) struct RenderUnit {
     pub(crate) kind: RenderUnitKind,
     pub(crate) leaf_range: Range<usize>,
+    pub(crate) blend: BlendModeIR,
     pub(crate) transition_in: Option<ResolvedTransition>,
     pub(crate) transition_out: Option<ResolvedTransition>,
 }
@@ -226,6 +227,7 @@ impl Evaluator {
                             self.graph.units.push(RenderUnit {
                                 kind: RenderUnitKind::Group(frame.idx),
                                 leaf_range: frame.start_leaf..end_leaf,
+                                blend: node_ir.blend,
                                 transition_in: tin,
                                 transition_out: tout,
                             });
@@ -290,6 +292,7 @@ impl Evaluator {
                                 self.graph.units.push(RenderUnit {
                                     kind: RenderUnitKind::Leaf(idx),
                                     leaf_range: leaf_i..(leaf_i + 1),
+                                    blend: node.blend,
                                     transition_in: tin,
                                     transition_out: tout,
                                 });
@@ -353,6 +356,7 @@ impl Evaluator {
 fn group_requires_isolation(node: &NodeIR) -> bool {
     node.mask.is_some()
         || !node.effects.is_empty()
+        || node.blend != BlendModeIR::Normal
         || node.transition_in.is_some()
         || node.transition_out.is_some()
 }
@@ -616,6 +620,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -630,6 +635,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -659,6 +665,7 @@ mod tests {
                 range: [0, 20],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,
@@ -687,6 +694,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -701,6 +709,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -717,6 +726,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![EffectInstanceDef {
                 kind: "blur".to_owned(),
@@ -751,6 +761,7 @@ mod tests {
                 range: [0, 10],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,
@@ -790,6 +801,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(10.0, 10.0),
                 ..Default::default()
@@ -807,6 +819,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(20.0, 10.0),
                 ..Default::default()
@@ -837,6 +850,7 @@ mod tests {
                 range: [0, 10],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: Some(LayoutPropsDef {
                     size: px_size(100.0, 100.0),
                     ..Default::default()
@@ -885,6 +899,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(10.0, 10.0),
                 ..Default::default()
@@ -902,6 +917,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(10.0, 20.0),
                 direction: crate::scene::model::LayoutDirectionDef::Column,
@@ -933,6 +949,7 @@ mod tests {
                 range: [0, 10],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: Some(LayoutPropsDef {
                     direction: crate::scene::model::LayoutDirectionDef::Column,
                     size: px_size(100.0, 100.0),
@@ -982,6 +999,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(10.0, 10.0),
                 ..Default::default()
@@ -999,6 +1017,7 @@ mod tests {
             range: [10, 20],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(10.0, 10.0),
                 ..Default::default()
@@ -1035,6 +1054,7 @@ mod tests {
                 range: [0, 20],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: Some(root_layout),
                 effects: vec![],
                 mask: None,
@@ -1081,6 +1101,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(10.0, 10.0),
                 ..Default::default()
@@ -1098,6 +1119,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(10.0, 10.0),
                 ..Default::default()
@@ -1130,6 +1152,7 @@ mod tests {
                 range: [0, 10],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: Some(LayoutPropsDef {
                     justify_content: LayoutJustifyContentDef::Center,
                     size: px_size(100.0, 100.0),
@@ -1170,6 +1193,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(10.0, 10.0),
                 ..Default::default()
@@ -1187,6 +1211,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: Some(LayoutPropsDef {
                 size: px_size(10.0, 10.0),
                 ..Default::default()
@@ -1217,6 +1242,7 @@ mod tests {
                 range: [0, 10],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: Some(LayoutPropsDef {
                     display: crate::scene::model::LayoutDisplayDef::Grid,
                     size: px_size(100.0, 100.0),
@@ -1253,6 +1279,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -1273,6 +1300,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -1306,6 +1334,7 @@ mod tests {
                 range: [0, 17],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,
@@ -1348,6 +1377,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -1367,6 +1397,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -1399,6 +1430,7 @@ mod tests {
                 range: [0, 17],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,

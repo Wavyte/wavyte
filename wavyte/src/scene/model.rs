@@ -143,6 +143,8 @@ pub(crate) struct NodeDef {
     pub(crate) transform: TransformDef,
     #[serde(default = "default_opacity")]
     pub(crate) opacity: AnimDef<f64>,
+    #[serde(default)]
+    pub(crate) blend: BlendModeDef,
 
     /// Optional layout participation (Flex/Grid) for this node.
     ///
@@ -162,6 +164,24 @@ pub(crate) struct NodeDef {
 
 fn default_opacity() -> AnimDef<f64> {
     AnimDef::Constant(1.0)
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum BlendModeDef {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    SoftLight,
+    HardLight,
+    Difference,
+    Exclusion,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

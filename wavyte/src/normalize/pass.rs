@@ -2,25 +2,27 @@ use crate::animation::anim::{
     Anim, AnimDef, AnimTaggedDef, InterpMode, Keyframe, Keyframes, Procedural, ProceduralKind,
 };
 use crate::assets::color::ColorDef;
-use crate::effects::binding::{EffectBindingIR, ResolvedParamIR, ResolvedParamValueIR};
+use crate::effects::binding::{
+    CoreEffectKindIR, CoreParamKeyIR, EffectBindingIR, ResolvedParamIR, ResolvedParamValueIR,
+};
 use crate::foundation::core::{Canvas, Fps};
 use crate::foundation::ids::{AssetIdx, NodeIdx, VarId};
 use crate::foundation::ids::{EffectKindId, ParamId};
 use crate::normalize::intern::{InternId, StringInterner};
 use crate::normalize::ir::{
-    AnimDimensionIR, AssetIR, CollectionModeIR, CompositionIR, EdgesAnimIR, ExprSourceIR,
-    IrisShapeIR, LayoutAlignContentIR, LayoutAlignItemsIR, LayoutDirectionIR, LayoutDisplayIR,
-    LayoutIR, LayoutJustifyContentIR, LayoutPositionIR, LayoutPropsIR, LayoutWrapIR, MaskIR,
-    MaskModeIR, MaskSourceIR, NodeIR, NodeKindIR, NodePropsIR, NormalizedComposition,
-    RegistryBindings, ShapeIR, SizeAnimIR, SlideDirIR, TransitionKindIR, TransitionSpecIR,
-    ValueTypeIR, VarValueIR, WipeDirIR,
+    AnimDimensionIR, AssetIR, BlendModeIR, CollectionModeIR, CompositionIR, EdgesAnimIR,
+    ExprSourceIR, IrisShapeIR, LayoutAlignContentIR, LayoutAlignItemsIR, LayoutDirectionIR,
+    LayoutDisplayIR, LayoutIR, LayoutJustifyContentIR, LayoutPositionIR, LayoutPropsIR,
+    LayoutWrapIR, MaskIR, MaskModeIR, MaskSourceIR, NodeIR, NodeKindIR, NodePropsIR,
+    NormalizedComposition, RegistryBindings, ShapeIR, SizeAnimIR, SlideDirIR, TransitionKindIR,
+    TransitionSpecIR, ValueTypeIR, VarValueIR, WipeDirIR,
 };
 use crate::normalize::property::{PropertyIndex, PropertyKey};
 use crate::scene::model::{
-    AnimDimensionDef, AssetDef, CollectionModeDef, CompositionDef, EdgesAnimDef, EffectInstanceDef,
-    LayoutAlignContentDef, LayoutAlignItemsDef, LayoutDirectionDef, LayoutDisplayDef,
-    LayoutJustifyContentDef, LayoutPositionDef, LayoutPropsDef, LayoutWrapDef, MaskDef,
-    MaskModeDef, MaskSourceDef, NodeDef, NodeKindDef, ShapeDef, SizeDef, TransformDef,
+    AnimDimensionDef, AssetDef, BlendModeDef, CollectionModeDef, CompositionDef, EdgesAnimDef,
+    EffectInstanceDef, LayoutAlignContentDef, LayoutAlignItemsDef, LayoutDirectionDef,
+    LayoutDisplayDef, LayoutJustifyContentDef, LayoutPositionDef, LayoutPropsDef, LayoutWrapDef,
+    MaskDef, MaskModeDef, MaskSourceDef, NodeDef, NodeKindDef, ShapeDef, SizeDef, TransformDef,
     TransitionSpecDef, VarDef,
 };
 use crate::schema::validate::{SchemaErrors, validate_composition};
@@ -325,6 +327,7 @@ fn normalize_node(
         kind: NodeKindIR::CompRef {
             composition: serde_json::Value::Null,
         },
+        blend: normalize_blend(node.blend),
         props: NodePropsIR {
             opacity: Anim::Constant(1.0),
             translate_x: Anim::Constant(0.0),
@@ -477,7 +480,33 @@ fn normalize_effect(
     interner: &mut StringInterner,
     registries: &mut RegistryBindingsBuilder,
 ) -> EffectBindingIR {
+    fn parse_effect_kind(kind: &str) -> CoreEffectKindIR {
+        match kind.trim().to_ascii_lowercase().as_str() {
+            "blur" => CoreEffectKindIR::Blur,
+            "color_matrix" | "colormatrix" => CoreEffectKindIR::ColorMatrix,
+            "drop_shadow" | "dropshadow" => CoreEffectKindIR::DropShadow,
+            _ => CoreEffectKindIR::Unknown,
+        }
+    }
+
+    fn parse_param_key(key: &str) -> CoreParamKeyIR {
+        match key.trim().to_ascii_lowercase().as_str() {
+            "value" => CoreParamKeyIR::Value,
+            "radius_px" | "radius" => CoreParamKeyIR::RadiusPx,
+            "sigma" => CoreParamKeyIR::Sigma,
+            "matrix" => CoreParamKeyIR::Matrix,
+            "offset" => CoreParamKeyIR::Offset,
+            "color" => CoreParamKeyIR::Color,
+            "blur_radius_px" => CoreParamKeyIR::BlurRadiusPx,
+            _ => CoreParamKeyIR::Unknown,
+        }
+    }
+
     fn resolve_param_value(v: &serde_json::Value) -> ResolvedParamValueIR {
+        if let Ok(c) = serde_json::from_value::<ColorDef>(v.clone()) {
+            return ResolvedParamValueIR::Color(c.to_rgba8_premul());
+        }
+
         match v {
             serde_json::Value::Number(n) => ResolvedParamValueIR::F64(n.as_f64().unwrap_or(0.0)),
             serde_json::Value::Bool(b) => ResolvedParamValueIR::Bool(*b),
@@ -492,6 +521,20 @@ fn normalize_effect(
                         ));
                     }
                 }
+                if arr.len() == 20 {
+                    let mut m = [0.0f32; 20];
+                    let mut ok = true;
+                    for (i, v) in arr.iter().enumerate() {
+                        let Some(f) = v.as_f64() else {
+                            ok = false;
+                            break;
+                        };
+                        m[i] = f as f32;
+                    }
+                    if ok {
+                        return ResolvedParamValueIR::Matrix20(m);
+                    }
+                }
                 ResolvedParamValueIR::Json(v.clone())
             }
             _ => ResolvedParamValueIR::Json(v.clone()),
@@ -500,6 +543,7 @@ fn normalize_effect(
 
     let kind_intern = interner.intern(&e.kind);
     let kind = registries.effect_kind_id(kind_intern);
+    let core_kind = parse_effect_kind(&e.kind);
 
     let mut params = smallvec::SmallVec::<[ResolvedParamIR; 8]>::new();
     for (k, v) in &e.params {
@@ -507,11 +551,33 @@ fn normalize_effect(
         let id = registries.param_id(key_intern);
         params.push(ResolvedParamIR {
             id,
+            key: parse_param_key(k),
             value: resolve_param_value(v),
         });
     }
 
-    EffectBindingIR { kind, params }
+    EffectBindingIR {
+        kind,
+        core_kind,
+        params,
+    }
+}
+
+fn normalize_blend(v: BlendModeDef) -> BlendModeIR {
+    match v {
+        BlendModeDef::Normal => BlendModeIR::Normal,
+        BlendModeDef::Multiply => BlendModeIR::Multiply,
+        BlendModeDef::Screen => BlendModeIR::Screen,
+        BlendModeDef::Overlay => BlendModeIR::Overlay,
+        BlendModeDef::Darken => BlendModeIR::Darken,
+        BlendModeDef::Lighten => BlendModeIR::Lighten,
+        BlendModeDef::ColorDodge => BlendModeIR::ColorDodge,
+        BlendModeDef::ColorBurn => BlendModeIR::ColorBurn,
+        BlendModeDef::SoftLight => BlendModeIR::SoftLight,
+        BlendModeDef::HardLight => BlendModeIR::HardLight,
+        BlendModeDef::Difference => BlendModeIR::Difference,
+        BlendModeDef::Exclusion => BlendModeIR::Exclusion,
+    }
 }
 
 fn normalize_transition(t: &TransitionSpecDef) -> TransitionSpecIR {
@@ -1187,6 +1253,7 @@ mod tests {
                         range: [0, 10],
                         transform: TransformDef::default(),
                         opacity: AnimDef::Constant(1.0),
+                        blend: Default::default(),
                         layout: None,
                         effects: vec![],
                         mask: None,
@@ -1197,6 +1264,7 @@ mod tests {
                 range: [0, 10],
                 transform: TransformDef::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,

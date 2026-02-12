@@ -1065,6 +1065,134 @@ impl CpuBackendV03 {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn exec_drop_shadow_pass(
+        &mut self,
+        offset: crate::foundation::core::Vec2,
+        blur_radius_px: u32,
+        sigma: f32,
+        color: Rgba8Premul,
+        surfaces: &mut ExecSurfaces<'_>,
+        inputs: &SmallVec<[SurfaceId; 4]>,
+        out: SurfaceId,
+    ) -> WavyteResult<()> {
+        let Some(&src_id) = inputs.first() else {
+            return Err(WavyteError::evaluation(
+                "DropShadow pass expects 1 input surface",
+            ));
+        };
+        let desc = surfaces.desc(out);
+        surfaces.ensure(out, desc)?;
+        let expected = (desc.width as usize)
+            .saturating_mul(desc.height as usize)
+            .saturating_mul(4);
+
+        self.blur_scratch_a.resize(expected, 0);
+        self.blur_scratch_b.resize(expected, 0);
+        {
+            let src_pm = surfaces
+                .pixmaps
+                .get(src_id.0 as usize)
+                .and_then(|x| x.as_ref())
+                .ok_or_else(|| WavyteError::evaluation("DropShadow input surface missing"))?;
+            let src = src_pm.data_as_u8_slice();
+            if src.len() != expected {
+                return Err(WavyteError::evaluation(
+                    "DropShadow input buffer size mismatch",
+                ));
+            }
+            self.blur_scratch_a.copy_from_slice(src);
+        }
+
+        // Tint source alpha into shadow color (premul), then blur.
+        for (src, out_px) in self
+            .blur_scratch_a
+            .chunks_exact(4)
+            .zip(self.blur_scratch_b.chunks_exact_mut(4))
+        {
+            let a = src[3] as u16;
+            out_px[0] = mul_div255_u8(color.r as u16, a);
+            out_px[1] = mul_div255_u8(color.g as u16, a);
+            out_px[2] = mul_div255_u8(color.b as u16, a);
+            out_px[3] = mul_div255_u8(color.a as u16, a);
+        }
+
+        let sigma_bits = sigma.to_bits();
+        let key = BlurKernelKey {
+            radius_px: blur_radius_px,
+            sigma_bits,
+        };
+        let kernel = if let Some(k) = self.blur_kernel_cache.get(&key).cloned() {
+            k
+        } else {
+            let k = gaussian_kernel_q16(blur_radius_px, sigma)?;
+            let a = Arc::new(k);
+            self.blur_kernel_cache.insert(key, a.clone());
+            a
+        };
+
+        {
+            let dst_pm = surfaces.pixmaps[out.0 as usize]
+                .as_mut()
+                .ok_or_else(|| WavyteError::evaluation("DropShadow output surface missing"))?;
+            let dst = dst_pm.data_as_u8_slice_mut();
+            if dst.len() != expected {
+                return Err(WavyteError::evaluation(
+                    "DropShadow output buffer size mismatch",
+                ));
+            }
+            blur_rgba8_premul_q16(
+                &self.blur_scratch_b,
+                dst,
+                &mut self.blur_scratch_a,
+                desc.width,
+                desc.height,
+                &kernel,
+            );
+
+            // Apply integer pixel offset to blurred shadow.
+            let dx = offset.x.round() as i32;
+            let dy = offset.y.round() as i32;
+            if dx != 0 || dy != 0 {
+                self.blur_scratch_b.copy_from_slice(dst);
+                dst.fill(0);
+                let w = desc.width as i32;
+                let h = desc.height as i32;
+                for y in 0..h {
+                    let sy = y - dy;
+                    if sy < 0 || sy >= h {
+                        continue;
+                    }
+                    for x in 0..w {
+                        let sx = x - dx;
+                        if sx < 0 || sx >= w {
+                            continue;
+                        }
+                        let s = ((sy as usize) * (desc.width as usize) + (sx as usize)) * 4;
+                        let d = ((y as usize) * (desc.width as usize) + (x as usize)) * 4;
+                        dst[d..d + 4].copy_from_slice(&self.blur_scratch_b[s..s + 4]);
+                    }
+                }
+            }
+        }
+
+        // Composite original source over shadow.
+        {
+            let src_pm = surfaces
+                .pixmaps
+                .get(src_id.0 as usize)
+                .and_then(|x| x.as_ref())
+                .ok_or_else(|| WavyteError::evaluation("DropShadow input surface missing"))?;
+            self.blur_scratch_a
+                .copy_from_slice(src_pm.data_as_u8_slice());
+        }
+        let dst_pm = surfaces.pixmaps[out.0 as usize]
+            .as_mut()
+            .ok_or_else(|| WavyteError::evaluation("DropShadow output surface missing"))?;
+        premul_over_in_place(dst_pm.data_as_u8_slice_mut(), &self.blur_scratch_a)?;
+        Ok(())
+    }
+
     fn exec_composite(
         &mut self,
         clear_to_transparent: bool,
@@ -1425,10 +1553,24 @@ impl RenderBackendV03 for CpuBackendV03 {
                 } => {
                     self.exec_color_matrix_pass(*matrix, &mut surfaces, &op.inputs, op.output)?;
                 }
-                other => {
-                    return Err(WavyteError::evaluation(format!(
-                        "v0.3 cpu backend: op kind not implemented yet: {other:?}"
-                    )));
+                OpKind::Pass {
+                    fx:
+                        crate::compile::plan::PassFx::DropShadow {
+                            offset,
+                            blur_radius_px,
+                            sigma,
+                            color,
+                        },
+                } => {
+                    self.exec_drop_shadow_pass(
+                        *offset,
+                        *blur_radius_px,
+                        *sigma,
+                        *color,
+                        &mut surfaces,
+                        &op.inputs,
+                        op.output,
+                    )?;
                 }
             }
 
@@ -2713,6 +2855,7 @@ mod tests {
                         range: [0, 1],
                         transform: Default::default(),
                         opacity: AnimDef::Constant(1.0),
+                        blend: Default::default(),
                         layout: None,
                         effects: vec![],
                         mask: None,
@@ -2723,6 +2866,7 @@ mod tests {
                 range: [0, 1],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,
@@ -3022,6 +3166,7 @@ mod tests {
                         range: [0, frames],
                         transform: Default::default(),
                         opacity: AnimDef::Constant(1.0),
+                        blend: Default::default(),
                         layout: None,
                         effects: vec![],
                         mask: None,
@@ -3032,6 +3177,7 @@ mod tests {
                 range: [0, frames],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,

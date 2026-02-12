@@ -2,10 +2,14 @@ use crate::compile::plan::{
     BlendMode, CompositeOp, MaskGenSource, MaskMode, Op, OpId, OpKind, PassFx, PixelFormat,
     RenderPlan, SurfaceDesc, SurfaceId, UnitKey,
 };
+use crate::effects::binding::{
+    CoreEffectKindIR, CoreParamKeyIR, EffectBindingIR, ResolvedParamValueIR,
+};
 use crate::eval::evaluator::{EvaluatedGraph, RenderUnitKind, ResolvedTransition};
 use crate::foundation::core::Affine;
 use crate::normalize::ir::{
-    CompositionIR, IrisShapeIR, MaskModeIR, MaskSourceIR, SlideDirIR, TransitionKindIR, WipeDirIR,
+    BlendModeIR, CompositionIR, IrisShapeIR, MaskModeIR, MaskSourceIR, SlideDirIR,
+    TransitionKindIR, WipeDirIR,
 };
 use smallvec::{SmallVec, smallvec};
 
@@ -39,6 +43,7 @@ pub(crate) fn compile_frame(ir: &CompositionIR, eval: &EvaluatedGraph) -> Render
         let needs_isolation = matches!(unit.kind, RenderUnitKind::Group(_))
             || node.mask.is_some()
             || !node.effects.is_empty()
+            || unit.blend != BlendModeIR::Normal
             || has_transition;
 
         if !needs_isolation {
@@ -87,6 +92,14 @@ pub(crate) fn compile_frame(ir: &CompositionIR, eval: &EvaluatedGraph) -> Render
             );
             current_surface = masked_surface;
         }
+        current_surface = compile_effect_chain(
+            node.effects.as_slice(),
+            current_surface,
+            root,
+            &mut surfaces,
+            &mut ops,
+            &mut last_write,
+        );
 
         unit_surfaces.push(Some(current_surface));
     }
@@ -120,6 +133,7 @@ pub(crate) fn compile_frame(ir: &CompositionIR, eval: &EvaluatedGraph) -> Render
                 &mut root_written,
                 pair_surface,
                 1.0,
+                map_blend_mode(eval.units[i + 1].blend),
             );
 
             i += 2;
@@ -136,6 +150,7 @@ pub(crate) fn compile_frame(ir: &CompositionIR, eval: &EvaluatedGraph) -> Render
                 &mut root_written,
                 surf,
                 opacity,
+                map_blend_mode(unit.blend),
             );
         } else {
             // Direct draw into root (no intermediate surface).
@@ -189,6 +204,9 @@ fn try_pair_transition(
 ) -> Option<(TransitionKindIR, SurfaceId, SurfaceId, f32)> {
     let a = eval.units.get(i)?;
     let b = eval.units.get(i + 1)?;
+    if a.blend != b.blend {
+        return None;
+    }
 
     let a_out = a.transition_out.as_ref()?;
     let b_in = b.transition_in.as_ref()?;
@@ -217,12 +235,13 @@ fn composite_over_root(
     root_written: &mut bool,
     src: SurfaceId,
     opacity: f32,
+    blend: BlendMode,
 ) {
     let mut cop = SmallVec::<[CompositeOp; 8]>::new();
     cop.push(CompositeOp::Over {
         src,
         opacity,
-        blend: BlendMode::Normal,
+        blend,
     });
 
     let mut inputs = SmallVec::<[SurfaceId; 4]>::new();
@@ -283,6 +302,155 @@ fn transition_composite(kind: TransitionKindIR, a: SurfaceId, b: SurfaceId, t: f
     }
 }
 
+fn compile_effect_chain(
+    effects: &[EffectBindingIR],
+    mut current_surface: SurfaceId,
+    root: SurfaceId,
+    surfaces: &mut Vec<SurfaceDesc>,
+    ops: &mut Vec<Op>,
+    last_write: &mut Vec<Option<OpId>>,
+) -> SurfaceId {
+    for effect in effects {
+        let Some(fx) = effect_to_pass(effect) else {
+            continue;
+        };
+        let out = alloc_surface_like(surfaces, last_write, root);
+        push_op(
+            ops,
+            last_write,
+            OpKind::Pass { fx },
+            smallvec![current_surface],
+            out,
+        );
+        current_surface = out;
+    }
+    current_surface
+}
+
+fn effect_to_pass(effect: &EffectBindingIR) -> Option<PassFx> {
+    match effect.core_kind {
+        CoreEffectKindIR::Blur => {
+            let radius = read_u32_param(effect, &[CoreParamKeyIR::RadiusPx, CoreParamKeyIR::Value])
+                .unwrap_or(8);
+            let sigma = read_f32_param(effect, &[CoreParamKeyIR::Sigma])
+                .unwrap_or_else(|| default_blur_sigma(radius));
+            Some(PassFx::Blur {
+                radius_px: radius,
+                sigma,
+            })
+        }
+        CoreEffectKindIR::ColorMatrix => {
+            let matrix =
+                read_matrix_param(effect, &[CoreParamKeyIR::Matrix, CoreParamKeyIR::Value])
+                    .unwrap_or_else(identity_color_matrix);
+            Some(PassFx::ColorMatrix { matrix })
+        }
+        CoreEffectKindIR::DropShadow => {
+            let offset = read_vec2_param(effect, &[CoreParamKeyIR::Offset])
+                .unwrap_or_else(|| crate::foundation::core::Vec2::new(4.0, 4.0));
+            let blur_radius_px = read_u32_param(
+                effect,
+                &[CoreParamKeyIR::BlurRadiusPx, CoreParamKeyIR::RadiusPx],
+            )
+            .or_else(|| read_u32_param(effect, &[CoreParamKeyIR::Value]))
+            .unwrap_or(8);
+            let sigma = read_f32_param(effect, &[CoreParamKeyIR::Sigma])
+                .unwrap_or_else(|| default_blur_sigma(blur_radius_px));
+            let color = read_color_param(effect, &[CoreParamKeyIR::Color]).unwrap_or_else(|| {
+                crate::foundation::core::Rgba8Premul::from_straight_rgba(0, 0, 0, 192)
+            });
+            Some(PassFx::DropShadow {
+                offset,
+                blur_radius_px,
+                sigma,
+                color,
+            })
+        }
+        CoreEffectKindIR::Unknown => None,
+    }
+}
+
+fn read_u32_param(effect: &EffectBindingIR, keys: &[CoreParamKeyIR]) -> Option<u32> {
+    read_f64_param(effect, keys).map(|v| v.max(0.0).round() as u32)
+}
+
+fn read_f32_param(effect: &EffectBindingIR, keys: &[CoreParamKeyIR]) -> Option<f32> {
+    read_f64_param(effect, keys).map(|v| v as f32)
+}
+
+fn read_f64_param(effect: &EffectBindingIR, keys: &[CoreParamKeyIR]) -> Option<f64> {
+    for p in &effect.params {
+        if !keys.contains(&p.key) {
+            continue;
+        }
+        match p.value {
+            ResolvedParamValueIR::F64(v) => return Some(v),
+            _ => continue,
+        }
+    }
+    None
+}
+
+fn read_vec2_param(
+    effect: &EffectBindingIR,
+    keys: &[CoreParamKeyIR],
+) -> Option<crate::foundation::core::Vec2> {
+    for p in &effect.params {
+        if !keys.contains(&p.key) {
+            continue;
+        }
+        match p.value {
+            ResolvedParamValueIR::Vec2(v) => return Some(v),
+            _ => continue,
+        }
+    }
+    None
+}
+
+fn read_color_param(
+    effect: &EffectBindingIR,
+    keys: &[CoreParamKeyIR],
+) -> Option<crate::foundation::core::Rgba8Premul> {
+    for p in &effect.params {
+        if !keys.contains(&p.key) {
+            continue;
+        }
+        match p.value {
+            ResolvedParamValueIR::Color(v) => return Some(v),
+            _ => continue,
+        }
+    }
+    None
+}
+
+fn read_matrix_param(effect: &EffectBindingIR, keys: &[CoreParamKeyIR]) -> Option<[f32; 20]> {
+    for p in &effect.params {
+        if !keys.contains(&p.key) {
+            continue;
+        }
+        match p.value {
+            ResolvedParamValueIR::Matrix20(v) => return Some(v),
+            _ => continue,
+        }
+    }
+    None
+}
+
+fn default_blur_sigma(radius: u32) -> f32 {
+    // Gaussian radius/sigma heuristic that keeps blur visually stable for small radii.
+    let r = radius as f32;
+    (r / 3.0).max(0.1)
+}
+
+fn identity_color_matrix() -> [f32; 20] {
+    [
+        1.0, 0.0, 0.0, 0.0, 0.0, //
+        0.0, 1.0, 0.0, 0.0, 0.0, //
+        0.0, 0.0, 1.0, 0.0, 0.0, //
+        0.0, 0.0, 0.0, 1.0, 0.0, //
+    ]
+}
+
 fn map_wipe_dir(dir: WipeDirIR) -> crate::compile::plan::WipeDir {
     match dir {
         WipeDirIR::LeftToRight => crate::compile::plan::WipeDir::LeftToRight,
@@ -306,6 +474,23 @@ fn map_iris_shape(shape: IrisShapeIR) -> crate::compile::plan::IrisShape {
         IrisShapeIR::Circle => crate::compile::plan::IrisShape::Circle,
         IrisShapeIR::Rect => crate::compile::plan::IrisShape::Rect,
         IrisShapeIR::Diamond => crate::compile::plan::IrisShape::Diamond,
+    }
+}
+
+fn map_blend_mode(v: BlendModeIR) -> BlendMode {
+    match v {
+        BlendModeIR::Normal => BlendMode::Normal,
+        BlendModeIR::Multiply => BlendMode::Multiply,
+        BlendModeIR::Screen => BlendMode::Screen,
+        BlendModeIR::Overlay => BlendMode::Overlay,
+        BlendModeIR::Darken => BlendMode::Darken,
+        BlendModeIR::Lighten => BlendMode::Lighten,
+        BlendModeIR::ColorDodge => BlendMode::ColorDodge,
+        BlendModeIR::ColorBurn => BlendMode::ColorBurn,
+        BlendModeIR::SoftLight => BlendMode::SoftLight,
+        BlendModeIR::HardLight => BlendMode::HardLight,
+        BlendModeIR::Difference => BlendMode::Difference,
+        BlendModeIR::Exclusion => BlendMode::Exclusion,
     }
 }
 
@@ -495,6 +680,7 @@ mod tests {
                             range: [0, 10],
                             transform: Default::default(),
                             opacity: AnimDef::Constant(1.0),
+                            blend: Default::default(),
                             layout: None,
                             effects: vec![],
                             mask: None,
@@ -509,6 +695,7 @@ mod tests {
                             range: [0, 10],
                             transform: Default::default(),
                             opacity: AnimDef::Constant(1.0),
+                            blend: Default::default(),
                             layout: None,
                             effects: vec![],
                             mask: None,
@@ -520,6 +707,7 @@ mod tests {
                 range: [0, 10],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,
@@ -555,6 +743,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -571,6 +760,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![EffectInstanceDef {
                 kind: "blur".to_owned(),
@@ -601,6 +791,7 @@ mod tests {
                 range: [0, 10],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,
@@ -617,10 +808,11 @@ mod tests {
         assert!(matches!(g.units[0].kind, RenderUnitKind::Group(_)));
 
         let plan = compile_frame(&norm.ir, g);
-        assert_eq!(plan.surfaces.len(), 2);
-        assert_eq!(plan.ops.len(), 2);
+        assert_eq!(plan.surfaces.len(), 3);
+        assert_eq!(plan.ops.len(), 3);
         assert!(matches!(plan.ops[0].kind, OpKind::Draw { .. }));
-        assert!(matches!(plan.ops[1].kind, OpKind::Composite { .. }));
+        assert!(matches!(plan.ops[1].kind, OpKind::Pass { .. }));
+        assert!(matches!(plan.ops[2].kind, OpKind::Composite { .. }));
     }
 
     #[test]
@@ -636,6 +828,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -650,6 +843,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -666,6 +860,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: Some(MaskDef {
@@ -697,6 +892,7 @@ mod tests {
                 range: [0, 10],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,
@@ -731,6 +927,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -751,6 +948,7 @@ mod tests {
             range: [8, 18],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -783,6 +981,7 @@ mod tests {
                 range: [0, 20],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,
@@ -825,6 +1024,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -845,6 +1045,7 @@ mod tests {
             range: [9, 19],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            blend: Default::default(),
             layout: None,
             effects: vec![],
             mask: None,
@@ -877,6 +1078,7 @@ mod tests {
                 range: [0, 20],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,
@@ -931,6 +1133,7 @@ mod tests {
                             range: [0, 10],
                             transform: Default::default(),
                             opacity: AnimDef::Constant(1.0),
+                            blend: Default::default(),
                             layout: None,
                             effects: vec![],
                             mask: None,
@@ -950,6 +1153,7 @@ mod tests {
                             range: [2, 12],
                             transform: Default::default(),
                             opacity: AnimDef::Constant(1.0),
+                            blend: Default::default(),
                             layout: None,
                             effects: vec![],
                             mask: None,
@@ -966,6 +1170,7 @@ mod tests {
                 range: [0, 20],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                blend: Default::default(),
                 layout: None,
                 effects: vec![],
                 mask: None,

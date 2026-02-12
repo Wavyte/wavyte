@@ -146,6 +146,7 @@ pub(crate) struct NodeIR {
     pub(crate) id: InternId,
     pub(crate) range: Range<u64>,
     pub(crate) kind: NodeKindIR,
+    pub(crate) blend: BlendModeIR,
 
     pub(crate) props: NodePropsIR,
     pub(crate) layout: Option<LayoutPropsIR>,
@@ -154,6 +155,22 @@ pub(crate) struct NodeIR {
     pub(crate) mask: Option<MaskIR>,
     pub(crate) transition_in: Option<TransitionSpecIR>,
     pub(crate) transition_out: Option<TransitionSpecIR>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlendModeIR {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    SoftLight,
+    HardLight,
+    Difference,
+    Exclusion,
 }
 
 #[derive(Debug, Clone)]

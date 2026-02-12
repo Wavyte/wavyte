@@ -593,6 +593,7 @@ mod tests {
                 range: [0, duration],
                 transform: Default::default(),
                 opacity,
+                blend: Default::default(),
                 layout: None,
                 effects: Vec::new(),
                 mask: None,
