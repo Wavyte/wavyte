@@ -185,6 +185,26 @@ fn sample_node_lane(
         | PropertyKey::LayoutHeight => Err(VmError::new(
             "layout lanes are forbidden in v0.3 expressions",
         )),
+        PropertyKey::LayoutGapX
+        | PropertyKey::LayoutGapY
+        | PropertyKey::LayoutPaddingTopPx
+        | PropertyKey::LayoutPaddingRightPx
+        | PropertyKey::LayoutPaddingBottomPx
+        | PropertyKey::LayoutPaddingLeftPx
+        | PropertyKey::LayoutMarginTopPx
+        | PropertyKey::LayoutMarginRightPx
+        | PropertyKey::LayoutMarginBottomPx
+        | PropertyKey::LayoutMarginLeftPx
+        | PropertyKey::LayoutFlexGrow
+        | PropertyKey::LayoutFlexShrink
+        | PropertyKey::LayoutWidthPx
+        | PropertyKey::LayoutHeightPx
+        | PropertyKey::LayoutMinWidthPx
+        | PropertyKey::LayoutMinHeightPx
+        | PropertyKey::LayoutMaxWidthPx
+        | PropertyKey::LayoutMaxHeightPx => Err(VmError::new(
+            "layout style lanes are not readable via SampleNodeLane in v0.3",
+        )),
     }
 }
 
@@ -278,6 +298,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Tagged(AnimTaggedDef::Expr("=time.progress".to_owned())),
+            layout: None,
             effects: vec![],
             mask: None,
             transition_in: None,
@@ -304,6 +325,7 @@ mod tests {
                 range: [0, 20],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                layout: None,
                 effects: vec![],
                 mask: None,
                 transition_in: None,
@@ -362,6 +384,7 @@ mod tests {
             opacity: AnimDef::Tagged(AnimTaggedDef::Expr(
                 "=nodes.b.transform.translate.x".to_owned(),
             )),
+            layout: None,
             effects: vec![],
             mask: None,
             transition_in: None,
@@ -376,6 +399,7 @@ mod tests {
             range: [0, 10],
             transform: Default::default(),
             opacity: AnimDef::Constant(1.0),
+            layout: None,
             effects: vec![],
             mask: None,
             transition_in: None,
@@ -404,6 +428,7 @@ mod tests {
                 range: [0, 20],
                 transform: Default::default(),
                 opacity: AnimDef::Constant(1.0),
+                layout: None,
                 effects: vec![],
                 mask: None,
                 transition_in: None,

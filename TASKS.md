@@ -200,29 +200,29 @@ Goal: allocation-free steady-state evaluation producing `EvaluatedGraph` + `Rend
 
 Goal: cached Taffy tree with lane-typed style updates and deterministic rect injection.
 
-Commit 4.1: Add Taffy bridge scaffolding
+- [x] Commit 4.1: Add Taffy bridge scaffolding
 - Create `layout/taffy_bridge.rs` with session-owned tree and `node_to_taffy` mapping.
 - Implement structure build from `CompositionIR` for layout-participating nodes.
 - Validation: canonical verify command set.
 
-Commit 4.2: Implement supported `LayoutProps` subset
+- [ ] Commit 4.2: Implement supported `LayoutProps` subset
 - Implement static enums and animatable numeric lanes as per spec section 10.5.
 - Map to Taffy styles; update styles incrementally per frame.
 - Validation: canonical verify command set.
 
-Commit 4.3: Intrinsic measurement integration
+- [ ] Commit 4.3: Intrinsic measurement integration
 - Implement intrinsic size for:
   - image/svg/path/solidrect/gradient/noise/null
   - text (using prepared text metrics, render-constant in v0.3)
   - video (static dimensions)
 - Validation: canonical verify command set.
 
-Commit 4.4: Layout caching and dirty rules
+- [ ] Commit 4.4: Layout caching and dirty rules
 - Implement “dirty” sources and skip layout solve when not needed.
 - Ensure invisible nodes do not influence layout.
 - Validation: canonical verify command set.
 
-Commit 4.5: Layout parity tests
+- [ ] Commit 4.5: Layout parity tests
 - Add focused tests for flex row/column and simple grid.
 - Validation: canonical verify command set.
 

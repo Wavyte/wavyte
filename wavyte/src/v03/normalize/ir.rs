@@ -122,6 +122,7 @@ pub(crate) struct NodeIR {
     pub(crate) kind: NodeKindIR,
 
     pub(crate) props: NodePropsIR,
+    pub(crate) layout: Option<LayoutPropsIR>,
 
     pub(crate) effects: Vec<EffectBindingIR>,
     pub(crate) mask: Option<MaskIR>,
@@ -143,6 +144,104 @@ pub(crate) struct NodePropsIR {
     pub(crate) skew_y_deg: Anim<f64>,
 
     pub(crate) switch_active: Option<Anim<u64>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LayoutPropsIR {
+    pub(crate) display: LayoutDisplayIR,
+    pub(crate) direction: LayoutDirectionIR,
+    pub(crate) wrap: LayoutWrapIR,
+    pub(crate) justify_content: LayoutJustifyContentIR,
+    pub(crate) align_items: LayoutAlignItemsIR,
+    pub(crate) align_content: LayoutAlignContentIR,
+    pub(crate) position: LayoutPositionIR,
+
+    pub(crate) gap_x_px: Anim<f64>,
+    pub(crate) gap_y_px: Anim<f64>,
+    pub(crate) padding_px: EdgesAnimIR,
+    pub(crate) margin_px: EdgesAnimIR,
+
+    pub(crate) flex_grow: Anim<f64>,
+    pub(crate) flex_shrink: Anim<f64>,
+
+    pub(crate) size: SizeAnimIR,
+    pub(crate) min_size: SizeAnimIR,
+    pub(crate) max_size: SizeAnimIR,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EdgesAnimIR {
+    pub(crate) top: Anim<f64>,
+    pub(crate) right: Anim<f64>,
+    pub(crate) bottom: Anim<f64>,
+    pub(crate) left: Anim<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SizeAnimIR {
+    pub(crate) width: AnimDimensionIR,
+    pub(crate) height: AnimDimensionIR,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AnimDimensionIR {
+    Auto,
+    Px(Anim<f64>),
+    Percent(f32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutDisplayIR {
+    None,
+    Flex,
+    Grid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutDirectionIR {
+    Row,
+    Column,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutWrapIR {
+    NoWrap,
+    Wrap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutJustifyContentIR {
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutAlignItemsIR {
+    Start,
+    End,
+    Center,
+    Stretch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutAlignContentIR {
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+    Stretch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutPositionIR {
+    Relative,
+    Absolute,
 }
 
 #[derive(Debug, Clone)]

@@ -84,6 +84,12 @@ impl Vec2AnimDef {
     }
 }
 
+impl Default for Vec2AnimDef {
+    fn default() -> Self {
+        Self::constant(0.0, 0.0)
+    }
+}
+
 impl<'de> Deserialize<'de> for Vec2AnimDef {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -138,6 +144,12 @@ pub(crate) struct NodeDef {
     #[serde(default = "default_opacity")]
     pub(crate) opacity: AnimDef<f64>,
 
+    /// Optional layout participation (Flex/Grid) for this node.
+    ///
+    /// v0.3 keeps a performance-focused subset; see `wavyte_v03_proposal_final.md` section 10.
+    #[serde(default)]
+    pub(crate) layout: Option<LayoutPropsDef>,
+
     #[serde(default)]
     pub(crate) effects: Vec<EffectInstanceDef>,
     #[serde(default)]
@@ -174,6 +186,249 @@ pub(crate) enum CollectionModeDef {
     Sequence,
     Stack,
     Switch { active: AnimDef<u64> },
+}
+
+// ----------------------------
+// Layout (boundary)
+// ----------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct LayoutPropsDef {
+    #[serde(default)]
+    pub(crate) display: LayoutDisplayDef,
+    #[serde(default)]
+    pub(crate) direction: LayoutDirectionDef,
+    #[serde(default)]
+    pub(crate) wrap: LayoutWrapDef,
+    #[serde(default)]
+    pub(crate) justify_content: LayoutJustifyContentDef,
+    #[serde(default)]
+    pub(crate) align_items: LayoutAlignItemsDef,
+    #[serde(default)]
+    pub(crate) align_content: LayoutAlignContentDef,
+    #[serde(default)]
+    pub(crate) position: LayoutPositionDef,
+
+    #[serde(default)]
+    pub(crate) gap_px: Vec2AnimDef,
+    #[serde(default)]
+    pub(crate) padding_px: EdgesAnimDef,
+    #[serde(default)]
+    pub(crate) margin_px: EdgesAnimDef,
+
+    #[serde(default = "default_flex_grow")]
+    pub(crate) flex_grow: AnimDef<f64>,
+    #[serde(default = "default_flex_shrink")]
+    pub(crate) flex_shrink: AnimDef<f64>,
+
+    #[serde(default)]
+    pub(crate) size: SizeDef,
+    #[serde(default)]
+    pub(crate) min_size: SizeDef,
+    #[serde(default)]
+    pub(crate) max_size: SizeDef,
+}
+
+fn default_flex_grow() -> AnimDef<f64> {
+    AnimDef::Constant(0.0)
+}
+
+fn default_flex_shrink() -> AnimDef<f64> {
+    AnimDef::Constant(1.0)
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LayoutDisplayDef {
+    None,
+    #[default]
+    Flex,
+    Grid,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LayoutDirectionDef {
+    #[default]
+    Row,
+    Column,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LayoutWrapDef {
+    #[default]
+    NoWrap,
+    Wrap,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LayoutJustifyContentDef {
+    #[default]
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LayoutAlignItemsDef {
+    Start,
+    End,
+    Center,
+    #[default]
+    Stretch,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LayoutAlignContentDef {
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+    #[default]
+    Stretch,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LayoutPositionDef {
+    #[default]
+    Relative,
+    Absolute,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct EdgesAnimDef {
+    pub(crate) top: AnimDef<f64>,
+    pub(crate) right: AnimDef<f64>,
+    pub(crate) bottom: AnimDef<f64>,
+    pub(crate) left: AnimDef<f64>,
+}
+
+impl Default for EdgesAnimDef {
+    fn default() -> Self {
+        Self {
+            top: AnimDef::Constant(0.0),
+            right: AnimDef::Constant(0.0),
+            bottom: AnimDef::Constant(0.0),
+            left: AnimDef::Constant(0.0),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EdgesAnimDef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct EdgesObj {
+            top: Option<AnimDef<f64>>,
+            right: Option<AnimDef<f64>>,
+            bottom: Option<AnimDef<f64>>,
+            left: Option<AnimDef<f64>>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Obj(Box<EdgesObj>),
+            // Shorthand: single number applies to all edges.
+            Num(f64),
+        }
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Num(v) => Ok(Self {
+                top: AnimDef::Constant(v),
+                right: AnimDef::Constant(v),
+                bottom: AnimDef::Constant(v),
+                left: AnimDef::Constant(v),
+            }),
+            Repr::Obj(obj) => {
+                let d = Self::default();
+                Ok(Self {
+                    top: obj.top.unwrap_or(d.top),
+                    right: obj.right.unwrap_or(d.right),
+                    bottom: obj.bottom.unwrap_or(d.bottom),
+                    left: obj.left.unwrap_or(d.left),
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub(crate) struct SizeDef {
+    #[serde(default)]
+    pub(crate) width: AnimDimensionDef,
+    #[serde(default)]
+    pub(crate) height: AnimDimensionDef,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) enum AnimDimensionDef {
+    #[default]
+    Auto,
+    Px(AnimDef<f64>),
+    Percent(f64),
+}
+
+impl<'de> Deserialize<'de> for AnimDimensionDef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Str(String),
+            Num(f64),
+            ObjPx { px: AnimDef<f64> },
+            ObjPercent { percent: f64 },
+        }
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Str(s) => match s.as_str() {
+                "auto" => Ok(Self::Auto),
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown dimension string \"{other}\" (expected \"auto\")"
+                ))),
+            },
+            Repr::Num(v) => Ok(Self::Px(AnimDef::Constant(v))),
+            Repr::ObjPx { px } => Ok(Self::Px(px)),
+            Repr::ObjPercent { percent } => Ok(Self::Percent(percent)),
+        }
+    }
+}
+
+impl serde::Serialize for AnimDimensionDef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            Self::Auto => serializer.serialize_str("auto"),
+            Self::Px(px) => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry("px", px)?;
+                m.end()
+            }
+            Self::Percent(p) => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry("percent", p)?;
+                m.end()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

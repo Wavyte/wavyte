@@ -20,10 +20,30 @@ pub(crate) enum PropertyKey {
     LayoutY = 12,
     LayoutWidth = 13,
     LayoutHeight = 14,
+
+    // Layout inputs (animatable in v0.3; lane-typed)
+    LayoutGapX = 15,
+    LayoutGapY = 16,
+    LayoutPaddingTopPx = 17,
+    LayoutPaddingRightPx = 18,
+    LayoutPaddingBottomPx = 19,
+    LayoutPaddingLeftPx = 20,
+    LayoutMarginTopPx = 21,
+    LayoutMarginRightPx = 22,
+    LayoutMarginBottomPx = 23,
+    LayoutMarginLeftPx = 24,
+    LayoutFlexGrow = 25,
+    LayoutFlexShrink = 26,
+    LayoutWidthPx = 27,
+    LayoutHeightPx = 28,
+    LayoutMinWidthPx = 29,
+    LayoutMinHeightPx = 30,
+    LayoutMaxWidthPx = 31,
+    LayoutMaxHeightPx = 32,
 }
 
 impl PropertyKey {
-    pub(crate) const COUNT: u32 = 15;
+    pub(crate) const COUNT: u32 = 33;
 
     pub(crate) fn as_u32(self) -> u32 {
         self as u16 as u32

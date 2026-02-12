@@ -8,14 +8,19 @@ use crate::v03::foundation::ids::{AssetIdx, NodeIdx, VarId};
 use crate::v03::foundation::ids::{EffectKindId, ParamId};
 use crate::v03::normalize::intern::{InternId, StringInterner};
 use crate::v03::normalize::ir::{
-    AssetIR, CollectionModeIR, CompositionIR, ExprSourceIR, LayoutIR, MaskIR, MaskModeIR,
+    AnimDimensionIR, AssetIR, CollectionModeIR, CompositionIR, EdgesAnimIR, ExprSourceIR,
+    LayoutAlignContentIR, LayoutAlignItemsIR, LayoutDirectionIR, LayoutDisplayIR, LayoutIR,
+    LayoutJustifyContentIR, LayoutPositionIR, LayoutPropsIR, LayoutWrapIR, MaskIR, MaskModeIR,
     MaskSourceIR, NodeIR, NodeKindIR, NodePropsIR, NormalizedComposition, RegistryBindings,
-    ShapeIR, TransitionSpecIR, ValueTypeIR, VarValueIR,
+    ShapeIR, SizeAnimIR, TransitionSpecIR, ValueTypeIR, VarValueIR,
 };
 use crate::v03::normalize::property::{PropertyIndex, PropertyKey};
 use crate::v03::scene::model::{
-    AssetDef, CollectionModeDef, CompositionDef, EffectInstanceDef, MaskDef, MaskModeDef,
-    MaskSourceDef, NodeDef, NodeKindDef, ShapeDef, TransformDef, TransitionSpecDef, VarDef,
+    AnimDimensionDef, AssetDef, CollectionModeDef, CompositionDef, EdgesAnimDef, EffectInstanceDef,
+    LayoutAlignContentDef, LayoutAlignItemsDef, LayoutDirectionDef, LayoutDisplayDef,
+    LayoutJustifyContentDef, LayoutPositionDef, LayoutPropsDef, LayoutWrapDef, MaskDef,
+    MaskModeDef, MaskSourceDef, NodeDef, NodeKindDef, ShapeDef, SizeDef, TransformDef,
+    TransitionSpecDef, VarDef,
 };
 use crate::v03::schema::validate::{SchemaErrors, validate_composition};
 use std::collections::HashMap;
@@ -298,6 +303,7 @@ fn normalize_node(
             skew_y_deg: Anim::Constant(0.0),
             switch_active: None,
         },
+        layout: None,
         effects,
         mask,
         transition_in,
@@ -317,6 +323,8 @@ fn normalize_node(
     )?;
     nodes[idx.0 as usize].kind = kind;
     nodes[idx.0 as usize].props = props;
+    nodes[idx.0 as usize].layout =
+        normalize_layout(idx, node.layout.as_ref(), interner, expr_sources)?;
 
     Ok(idx)
 }
@@ -633,6 +641,208 @@ fn normalize_props(
     })
 }
 
+fn normalize_layout(
+    self_idx: NodeIdx,
+    layout: Option<&LayoutPropsDef>,
+    interner: &mut StringInterner,
+    expr_sources: &mut Vec<ExprSourceIR>,
+) -> Result<Option<LayoutPropsIR>, NormalizeError> {
+    let Some(layout) = layout else {
+        return Ok(None);
+    };
+
+    let display = match layout.display {
+        LayoutDisplayDef::None => LayoutDisplayIR::None,
+        LayoutDisplayDef::Flex => LayoutDisplayIR::Flex,
+        LayoutDisplayDef::Grid => LayoutDisplayIR::Grid,
+    };
+    let direction = match layout.direction {
+        LayoutDirectionDef::Row => LayoutDirectionIR::Row,
+        LayoutDirectionDef::Column => LayoutDirectionIR::Column,
+    };
+    let wrap = match layout.wrap {
+        LayoutWrapDef::NoWrap => LayoutWrapIR::NoWrap,
+        LayoutWrapDef::Wrap => LayoutWrapIR::Wrap,
+    };
+    let justify_content = match layout.justify_content {
+        LayoutJustifyContentDef::Start => LayoutJustifyContentIR::Start,
+        LayoutJustifyContentDef::End => LayoutJustifyContentIR::End,
+        LayoutJustifyContentDef::Center => LayoutJustifyContentIR::Center,
+        LayoutJustifyContentDef::SpaceBetween => LayoutJustifyContentIR::SpaceBetween,
+        LayoutJustifyContentDef::SpaceAround => LayoutJustifyContentIR::SpaceAround,
+        LayoutJustifyContentDef::SpaceEvenly => LayoutJustifyContentIR::SpaceEvenly,
+    };
+    let align_items = match layout.align_items {
+        LayoutAlignItemsDef::Start => LayoutAlignItemsIR::Start,
+        LayoutAlignItemsDef::End => LayoutAlignItemsIR::End,
+        LayoutAlignItemsDef::Center => LayoutAlignItemsIR::Center,
+        LayoutAlignItemsDef::Stretch => LayoutAlignItemsIR::Stretch,
+    };
+    let align_content = match layout.align_content {
+        LayoutAlignContentDef::Start => LayoutAlignContentIR::Start,
+        LayoutAlignContentDef::End => LayoutAlignContentIR::End,
+        LayoutAlignContentDef::Center => LayoutAlignContentIR::Center,
+        LayoutAlignContentDef::SpaceBetween => LayoutAlignContentIR::SpaceBetween,
+        LayoutAlignContentDef::SpaceAround => LayoutAlignContentIR::SpaceAround,
+        LayoutAlignContentDef::SpaceEvenly => LayoutAlignContentIR::SpaceEvenly,
+        LayoutAlignContentDef::Stretch => LayoutAlignContentIR::Stretch,
+    };
+    let position = match layout.position {
+        LayoutPositionDef::Relative => LayoutPositionIR::Relative,
+        LayoutPositionDef::Absolute => LayoutPositionIR::Absolute,
+    };
+
+    let gap_x_px = normalize_lane_f64(
+        self_idx,
+        PropertyKey::LayoutGapX,
+        &layout.gap_px.x,
+        interner,
+        expr_sources,
+    )?;
+    let gap_y_px = normalize_lane_f64(
+        self_idx,
+        PropertyKey::LayoutGapY,
+        &layout.gap_px.y,
+        interner,
+        expr_sources,
+    )?;
+
+    let padding_px = normalize_edges_anim(
+        self_idx,
+        &layout.padding_px,
+        (
+            PropertyKey::LayoutPaddingTopPx,
+            PropertyKey::LayoutPaddingRightPx,
+            PropertyKey::LayoutPaddingBottomPx,
+            PropertyKey::LayoutPaddingLeftPx,
+        ),
+        interner,
+        expr_sources,
+    )?;
+    let margin_px = normalize_edges_anim(
+        self_idx,
+        &layout.margin_px,
+        (
+            PropertyKey::LayoutMarginTopPx,
+            PropertyKey::LayoutMarginRightPx,
+            PropertyKey::LayoutMarginBottomPx,
+            PropertyKey::LayoutMarginLeftPx,
+        ),
+        interner,
+        expr_sources,
+    )?;
+
+    let flex_grow = normalize_lane_f64(
+        self_idx,
+        PropertyKey::LayoutFlexGrow,
+        &layout.flex_grow,
+        interner,
+        expr_sources,
+    )?;
+    let flex_shrink = normalize_lane_f64(
+        self_idx,
+        PropertyKey::LayoutFlexShrink,
+        &layout.flex_shrink,
+        interner,
+        expr_sources,
+    )?;
+
+    let size = normalize_size(
+        self_idx,
+        &layout.size,
+        (PropertyKey::LayoutWidthPx, PropertyKey::LayoutHeightPx),
+        interner,
+        expr_sources,
+    )?;
+    let min_size = normalize_size(
+        self_idx,
+        &layout.min_size,
+        (
+            PropertyKey::LayoutMinWidthPx,
+            PropertyKey::LayoutMinHeightPx,
+        ),
+        interner,
+        expr_sources,
+    )?;
+    let max_size = normalize_size(
+        self_idx,
+        &layout.max_size,
+        (
+            PropertyKey::LayoutMaxWidthPx,
+            PropertyKey::LayoutMaxHeightPx,
+        ),
+        interner,
+        expr_sources,
+    )?;
+
+    Ok(Some(LayoutPropsIR {
+        display,
+        direction,
+        wrap,
+        justify_content,
+        align_items,
+        align_content,
+        position,
+        gap_x_px,
+        gap_y_px,
+        padding_px,
+        margin_px,
+        flex_grow,
+        flex_shrink,
+        size,
+        min_size,
+        max_size,
+    }))
+}
+
+fn normalize_edges_anim(
+    self_idx: NodeIdx,
+    e: &EdgesAnimDef,
+    keys: (PropertyKey, PropertyKey, PropertyKey, PropertyKey),
+    interner: &mut StringInterner,
+    expr_sources: &mut Vec<ExprSourceIR>,
+) -> Result<EdgesAnimIR, NormalizeError> {
+    Ok(EdgesAnimIR {
+        top: normalize_lane_f64(self_idx, keys.0, &e.top, interner, expr_sources)?,
+        right: normalize_lane_f64(self_idx, keys.1, &e.right, interner, expr_sources)?,
+        bottom: normalize_lane_f64(self_idx, keys.2, &e.bottom, interner, expr_sources)?,
+        left: normalize_lane_f64(self_idx, keys.3, &e.left, interner, expr_sources)?,
+    })
+}
+
+fn normalize_size(
+    self_idx: NodeIdx,
+    s: &SizeDef,
+    keys: (PropertyKey, PropertyKey),
+    interner: &mut StringInterner,
+    expr_sources: &mut Vec<ExprSourceIR>,
+) -> Result<SizeAnimIR, NormalizeError> {
+    Ok(SizeAnimIR {
+        width: normalize_dimension(self_idx, &s.width, keys.0, interner, expr_sources)?,
+        height: normalize_dimension(self_idx, &s.height, keys.1, interner, expr_sources)?,
+    })
+}
+
+fn normalize_dimension(
+    self_idx: NodeIdx,
+    d: &AnimDimensionDef,
+    px_key: PropertyKey,
+    interner: &mut StringInterner,
+    expr_sources: &mut Vec<ExprSourceIR>,
+) -> Result<AnimDimensionIR, NormalizeError> {
+    match d {
+        AnimDimensionDef::Auto => Ok(AnimDimensionIR::Auto),
+        AnimDimensionDef::Percent(p) => Ok(AnimDimensionIR::Percent((*p as f32).max(0.0))),
+        AnimDimensionDef::Px(px) => Ok(AnimDimensionIR::Px(normalize_lane_f64(
+            self_idx,
+            px_key,
+            px,
+            interner,
+            expr_sources,
+        )?)),
+    }
+}
+
 fn normalize_lane_f64(
     self_idx: NodeIdx,
     key: PropertyKey,
@@ -847,6 +1057,7 @@ mod tests {
                         range: [0, 10],
                         transform: TransformDef::default(),
                         opacity: AnimDef::Constant(1.0),
+                        layout: None,
                         effects: vec![],
                         mask: None,
                         transition_in: None,
@@ -856,6 +1067,7 @@ mod tests {
                 range: [0, 10],
                 transform: TransformDef::default(),
                 opacity: AnimDef::Constant(1.0),
+                layout: None,
                 effects: vec![],
                 mask: None,
                 transition_in: None,
