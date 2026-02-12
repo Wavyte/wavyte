@@ -205,7 +205,7 @@ Goal: cached Taffy tree with lane-typed style updates and deterministic rect inj
 - Implement structure build from `CompositionIR` for layout-participating nodes.
 - Validation: canonical verify command set.
 
-- [ ] Commit 4.2: Implement supported `LayoutProps` subset
+- [x] Commit 4.2: Implement supported `LayoutProps` subset
 - Implement static enums and animatable numeric lanes as per spec section 10.5.
 - Map to Taffy styles; update styles incrementally per frame.
 - Validation: canonical verify command set.

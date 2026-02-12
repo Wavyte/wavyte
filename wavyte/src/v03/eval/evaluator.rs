@@ -8,6 +8,7 @@ use crate::v03::eval::visibility::{VisibilityState, compute_visibility};
 use crate::v03::expression::program::ExprProgram;
 use crate::v03::expression::vm::VmError;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx};
+use crate::v03::layout::taffy_bridge::TaffyBridge;
 use crate::v03::normalize::intern::InternId;
 use crate::v03::normalize::ir::{
     CollectionModeIR, CompositionIR, NodeIR, NodeKindIR, NodePropsIR, TransitionSpecIR,
@@ -67,6 +68,7 @@ pub(crate) struct Evaluator {
     props: PropertyValues,
     props_scratch: PropertyEvalScratch,
     vis: VisibilityState,
+    layout: TaffyBridge,
 
     graph: EvaluatedGraph,
 
@@ -105,6 +107,7 @@ impl Evaluator {
             props,
             props_scratch: PropertyEvalScratch::new(),
             vis: VisibilityState::default(),
+            layout: TaffyBridge::new(),
             graph: EvaluatedGraph {
                 frame: 0,
                 leaves: Vec::new(),
@@ -134,6 +137,15 @@ impl Evaluator {
         )?;
 
         compute_visibility(ir, &self.time_ctxs, Some(&self.props), &mut self.vis)?;
+
+        self.layout
+            .ensure_tree(ir)
+            .map_err(|e| VmError::new(e.to_string()))?;
+        self.layout
+            .update_styles_for_frame(ir, &self.time_ctxs, Some(&self.props))?;
+        self.layout
+            .compute_layout_canvas(ir.canvas.width as f32, ir.canvas.height as f32)
+            .map_err(|e| VmError::new(e.to_string()))?;
 
         self.graph.frame = global_frame;
         self.graph.leaves.clear();
@@ -210,7 +222,15 @@ impl Evaluator {
                         frame,
                         &self.props,
                     )?;
-                    let world = parent_world * local_affine;
+                    let layout_xy = self
+                        .layout
+                        .layout_rects
+                        .get(idx.0 as usize)
+                        .copied()
+                        .unwrap_or_default();
+                    let world = parent_world
+                        * Affine::translate((layout_xy.x as f64, layout_xy.y as f64))
+                        * local_affine;
                     let opacity = (parent_opacity * local_opacity).clamp(0.0, 1.0);
 
                     match &node.kind {
