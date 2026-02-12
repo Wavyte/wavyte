@@ -373,7 +373,7 @@ Goal: flip exports to v0.3, ship production-ready crate, and validate publish dr
 - Add `wavyte-std` crate (higher-level presets/builders for v0.3).
 - Validation: canonical verify command set.
 
-- [ ] Commit 8.7: Publish dry run validation (production-ready endpoint)
+- [x] Commit 8.7: Publish dry run validation (production-ready endpoint)
 - Run and record results in the PR description/notes:
   - `cargo publish -p wavyte --dry-run`
   - `cargo package -p wavyte`
