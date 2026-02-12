@@ -577,6 +577,18 @@ pub(crate) enum AssetDef {
         #[serde(default = "default_playback_rate")]
         playback_rate: f64,
     },
+    SolidRect {
+        #[serde(default)]
+        color: Option<ColorDef>,
+    },
+    Gradient {
+        start: ColorDef,
+        end: ColorDef,
+    },
+    Noise {
+        #[serde(default)]
+        seed: u64,
+    },
     Null,
 }
 

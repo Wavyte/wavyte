@@ -2,7 +2,7 @@ use crate::foundation::math::Fnv1a64;
 use crate::v03::animation::anim::{Anim, SampleCtx};
 use crate::v03::foundation::ids::NodeIdx;
 use crate::v03::layout::RectPx;
-use crate::v03::normalize::ir::{CompositionIR, NodeKindIR};
+use crate::v03::normalize::ir::{AssetIR, CompositionIR, NodeKindIR};
 use crate::v03::normalize::property::PropertyKey;
 use crate::v03::{
     eval::{context::NodeTimeCtx, properties::PropertyValues},
@@ -17,6 +17,7 @@ use taffy::style::{
 #[derive(Debug, Clone, Copy)]
 struct LayoutNodeCtx {
     node: NodeIdx,
+    intrinsic: Size<f32>,
 }
 
 /// Session-owned Taffy bridge.
@@ -83,7 +84,17 @@ impl TaffyBridge {
             width: AvailableSpace::Definite(canvas_w),
             height: AvailableSpace::Definite(canvas_h),
         };
-        self.taffy.compute_layout(root, available)?;
+        self.taffy.compute_layout_with_measure(
+            root,
+            available,
+            |known_dimensions, _available_space, _node_id, node_context, _style| {
+                let intrinsic = node_context
+                    .as_ref()
+                    .map(|c| c.intrinsic)
+                    .unwrap_or(Size::ZERO);
+                known_dimensions.unwrap_or(intrinsic)
+            },
+        )?;
 
         for (i, maybe) in self.node_to_taffy.iter().enumerate() {
             if let Some(nid) = maybe {
@@ -151,13 +162,24 @@ impl TaffyBridge {
         }
 
         let style = Style::default();
+        let intrinsic = intrinsic_size_for_node(ir, idx);
         let nid = if children_ids.is_empty() {
-            self.taffy
-                .new_leaf_with_context(style, LayoutNodeCtx { node: idx })?
+            self.taffy.new_leaf_with_context(
+                style,
+                LayoutNodeCtx {
+                    node: idx,
+                    intrinsic,
+                },
+            )?
         } else {
             let nid = self.taffy.new_with_children(style, &children_ids)?;
-            self.taffy
-                .set_node_context(nid, Some(LayoutNodeCtx { node: idx }))?;
+            self.taffy.set_node_context(
+                nid,
+                Some(LayoutNodeCtx {
+                    node: idx,
+                    intrinsic,
+                }),
+            )?;
             nid
         };
 
@@ -169,6 +191,36 @@ impl TaffyBridge {
         }
 
         Ok(Some(nid))
+    }
+}
+
+fn intrinsic_size_for_node(ir: &CompositionIR, idx: NodeIdx) -> Size<f32> {
+    let node = ir.nodes.get(idx.0 as usize);
+    let Some(node) = node else {
+        return Size::ZERO;
+    };
+
+    let NodeKindIR::Leaf { asset } = &node.kind else {
+        return Size::ZERO;
+    };
+    let Some(asset) = ir.assets.get(asset.0 as usize) else {
+        return Size::ZERO;
+    };
+
+    // v0.3 intent: use prepared assets for real intrinsic sizing (image/video dimensions,
+    // text shaping metrics, etc). Phase 4 only wires the measurement hook; the prepared
+    // asset store is introduced later in the rewrite.
+    match asset {
+        AssetIR::Image { .. }
+        | AssetIR::Svg { .. }
+        | AssetIR::Path { .. }
+        | AssetIR::Text { .. }
+        | AssetIR::Video { .. }
+        | AssetIR::Audio { .. }
+        | AssetIR::SolidRect { .. }
+        | AssetIR::Gradient { .. }
+        | AssetIR::Noise { .. }
+        | AssetIR::Null => Size::ZERO,
     }
 }
 

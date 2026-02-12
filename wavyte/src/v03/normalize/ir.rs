@@ -112,6 +112,16 @@ pub(crate) enum AssetIR {
         trim_end_sec: Option<f64>,
         playback_rate: f64,
     },
+    SolidRect {
+        color: Option<VarValueIR>,
+    },
+    Gradient {
+        start: VarValueIR,
+        end: VarValueIR,
+    },
+    Noise {
+        seed: u64,
+    },
     Null,
 }
 

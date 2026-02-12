@@ -174,6 +174,14 @@ fn normalize_asset(a: &AssetDef, interner: &mut StringInterner) -> AssetIR {
             trim_end_sec: *trim_end_sec,
             playback_rate: *playback_rate,
         },
+        AssetDef::SolidRect { color } => AssetIR::SolidRect {
+            color: color.as_ref().map(normalize_color_value),
+        },
+        AssetDef::Gradient { start, end } => AssetIR::Gradient {
+            start: normalize_color_value(start),
+            end: normalize_color_value(end),
+        },
+        AssetDef::Noise { seed } => AssetIR::Noise { seed: *seed },
         AssetDef::Null => AssetIR::Null,
     }
 }

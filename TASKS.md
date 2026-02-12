@@ -210,7 +210,7 @@ Goal: cached Taffy tree with lane-typed style updates and deterministic rect inj
 - Map to Taffy styles; update styles incrementally per frame.
 - Validation: canonical verify command set.
 
-- [ ] Commit 4.3: Intrinsic measurement integration
+- [x] Commit 4.3: Intrinsic measurement integration
 - Implement intrinsic size for:
   - image/svg/path/solidrect/gradient/noise/null
   - text (using prepared text metrics, render-constant in v0.3)
