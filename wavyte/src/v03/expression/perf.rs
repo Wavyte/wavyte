@@ -1,6 +1,6 @@
 use crate::v03::expression::bytecode::{BytecodeProgram, ConstVal, Op};
 use crate::v03::expression::program::{ExprProgram, PropertyEntry, PropertyProgram, ValueType};
-use crate::v03::expression::vm::{ValueSlot, eval_program};
+use crate::v03::expression::vm::{ValueSlot, eval_program_with_stack};
 use crate::v03::foundation::ids::{NodeIdx, PropertyId, VarId};
 use std::time::Instant;
 
@@ -46,6 +46,7 @@ fn make_chain_program(n: usize) -> ExprProgram {
 
 fn eval_chain(program: &ExprProgram, iters: usize) -> f64 {
     let mut values = vec![ValueSlot::F64(0.0); program.entry_by_pid.len()];
+    let mut stack = Vec::with_capacity(16);
     let mut acc = 0.0f64;
 
     for _ in 0..iters {
@@ -54,8 +55,9 @@ fn eval_chain(program: &ExprProgram, iters: usize) -> f64 {
             let entry = &program.entries[entry_idx];
             match &entry.program {
                 PropertyProgram::Expr(bc) => {
-                    let v = eval_program(
+                    let v = eval_program_with_stack(
                         bc,
+                        &mut stack,
                         |dep| Ok(values[dep.0 as usize]),
                         |_var: VarId| {
                             Err(crate::v03::expression::vm::VmError {

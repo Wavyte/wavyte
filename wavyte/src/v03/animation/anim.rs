@@ -423,6 +423,21 @@ impl ProcValue for (f64, f64) {
     }
 }
 
+impl ProcValue for u64 {
+    fn from_procedural(kind: &ProceduralKind, ctx: SampleCtx) -> Self {
+        match kind {
+            ProceduralKind::Scalar(s) => {
+                let v = sample_scalar(s, ctx.fps, ctx.frame, ctx.seed);
+                if !v.is_finite() {
+                    return 0;
+                }
+                v.floor().max(0.0) as u64
+            }
+            ProceduralKind::Vec2 { .. } => 0,
+        }
+    }
+}
+
 pub(crate) trait Lerp: Sized {
     fn lerp(a: &Self, b: &Self, t: f64) -> Self;
 }
@@ -447,6 +462,17 @@ impl Lerp for Rgba8Premul {
             b: lerp_u8(a.b, b.b, t),
             a: lerp_u8(a.a, b.a, t),
         }
+    }
+}
+
+impl Lerp for u64 {
+    fn lerp(a: &Self, b: &Self, t: f64) -> Self {
+        // Used for keyframes on discrete lanes like `switch.active`. v0.3 intends
+        // these to be `hold` in most cases, but we define linear interpolation to
+        // avoid panics when sampling.
+        let a = *a as f64;
+        let b = *b as f64;
+        (a + (b - a) * t).round().max(0.0) as u64
     }
 }
 

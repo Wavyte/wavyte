@@ -157,7 +157,7 @@ Goal: allocation-free steady-state evaluation producing `EvaluatedGraph` + `Rend
 - Ensure `Sequence` remapping and clamping semantics match spec.
 - Validation: canonical verify command set.
 
-- [ ] Commit 3.2: Property evaluation runtime
+- [x] Commit 3.2: Property evaluation runtime
 - Implement property program execution in topo order using `NodeTimeCtx` for `time.*`.
 - Implement `SampleNodeLane` programs (sampling literal anims for expression dependencies).
 - Validation: canonical verify command set.
