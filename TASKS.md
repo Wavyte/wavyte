@@ -235,7 +235,7 @@ Goal: deterministic DAG plan, surface lifetimes, fusion and stable fingerprintin
 - Ensure closed enums and deterministic serialization for hashing.
 - Validation: canonical verify command set.
 
-- [ ] Commit 5.2: Compile `RenderUnit`s into draw ops and surfaces
+- [x] Commit 5.2: Compile `RenderUnit`s into draw ops and surfaces
 - Implement unit isolation surfaces.
 - Implement leaf draw op mapping for each asset type.
 - Validation: canonical verify command set.

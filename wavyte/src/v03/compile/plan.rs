@@ -102,9 +102,8 @@ pub(crate) enum OpKind {
     /// - MaskApply: `[src, mask]`
     Pass { fx: PassFx },
     /// Composite multiple inputs into output (over + blend modes, paired transitions).
-    ///
-    /// This op clears `output` to transparent before applying the ordered compositing ops.
     Composite {
+        clear_to_transparent: bool,
         // Boxed to keep `OpKind` size reasonable; composite lists can be large.
         ops: Box<SmallVec<[CompositeOp; 8]>>,
     },
