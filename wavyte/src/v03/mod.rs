@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub(crate) mod animation;
 pub(crate) mod assets;
 pub(crate) mod audio;

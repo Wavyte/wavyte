@@ -8,6 +8,9 @@ targets=(
   "wavyte/src/eval"
   "wavyte/src/compile"
   "wavyte/src/render"
+  "wavyte/src/v03/eval"
+  "wavyte/src/v03/compile"
+  "wavyte/src/v03/render"
 )
 
 pattern='(HashMap|BTreeMap)<[[:space:]]*String'

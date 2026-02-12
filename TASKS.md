@@ -81,7 +81,7 @@ Goal: land the boundary/runtime split and build deterministic `CompositionIR` wi
 - Ensure `--all-features` builds with docs/clippy (document all `pub` surfaces).
 - Validation: canonical verify command set.
 
-- [ ] Commit 1.2: Add v0.3 ID types and interner
+- [x] Commit 1.2: Add v0.3 ID types and interner
 - Add `NodeIdx`, `AssetIdx`, `EffectKindId`, `TransitionKindId`, `ParamId`, `PropertyId`, `VarId`.
 - Add `normalize/intern.rs` string interner and stable id allocation.
 - Validation: canonical verify command set.
