@@ -309,26 +309,26 @@ Goal: pooled execution of DAG plan with parallel scheduling and correct kernels.
 
 Goal: sink-based streaming and audio mixing outside per-frame loop.
 
-Commit 7.1: Add `FrameSink` trait and `InMemorySink`
+- [x] Commit 7.1: Add `FrameSink` trait and `InMemorySink`
 - Implement sink interface and ordering contract.
 - Validation: canonical verify command set.
 
-Commit 7.2: Add `FfmpegSink` (video-only)
+- [ ] Commit 7.2: Add `FfmpegSink` (video-only)
 - Stream RGBA frames to ffmpeg stdin.
 - Implement flattening fast path and opaque skip path.
 - Validation: canonical verify command set.
 
-Commit 7.3: Add audio manifest and mixer modules
+- [ ] Commit 7.3: Add audio manifest and mixer modules
 - Add `audio/manifest.rs` and `audio/mix.rs` per spec 15.4.
 - Enforce Switch audio constraint: active must be constant over range (else validation error for audio).
 - Validation: canonical verify command set.
 
-Commit 7.4: Integrate audio into `FfmpegSink`
+- [ ] Commit 7.4: Integrate audio into `FfmpegSink`
 - Provide `.f32le` temp file input (baseline).
 - Ensure ffmpeg spawn and teardown are robust.
 - Validation: canonical verify command set.
 
-Commit 7.5: Range render streaming implementation
+- [ ] Commit 7.5: Range render streaming implementation
 - Implement `RenderSession::render_range` with:
   - chunking
   - rayon frame-level parallelism
