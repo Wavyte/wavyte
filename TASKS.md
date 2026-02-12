@@ -127,7 +127,7 @@ Goal: compiled, typed, id-addressed expressions with topo evaluation and cycle e
 - Add unit tests for grammar and errors.
 - Validation: canonical verify command set.
 
-Commit 2.2: Lower AST to bytecode + constant pool
+- [x] Commit 2.2: Lower AST to bytecode + constant pool
 - Implement stack VM bytecode format and opcodes.
 - Add unit tests for evaluation of arithmetic and built-ins.
 - Validation: canonical verify command set.
