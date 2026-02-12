@@ -310,7 +310,8 @@ fn mul_div255(x: u16, y: u16) -> u16 {
     mul_div255_u16(x, y)
 }
 
-fn ensure_parent_dir(path: &Path) -> WavyteResult<()> {
+/// Ensure the parent directory of `path` exists.
+pub fn ensure_parent_dir(path: &Path) -> WavyteResult<()> {
     if let Some(parent) = path.parent() {
         use anyhow::Context as _;
         std::fs::create_dir_all(parent)
@@ -319,7 +320,8 @@ fn ensure_parent_dir(path: &Path) -> WavyteResult<()> {
     Ok(())
 }
 
-fn is_ffmpeg_on_path() -> bool {
+/// Return `true` when `ffmpeg` can be invoked from `PATH`.
+pub fn is_ffmpeg_on_path() -> bool {
     std::process::Command::new("ffmpeg")
         .arg("-version")
         .stdout(std::process::Stdio::null())

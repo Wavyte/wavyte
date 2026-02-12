@@ -1,4 +1,4 @@
-# Performance Baseline (v0.2.1)
+# Performance Baseline
 
 Date: 2026-02-11
 
@@ -9,8 +9,8 @@ Machine:
 
 Methodology:
 - Command template:
-  - `cd bench && cargo run --release -- --repeats 10 --warmup 1 --seconds 10 --parallel --threads <N>`
-- Encoding enabled (default; no `--no-encode`)
+  - `cargo run -p wavyte-bench --release -- --repeats 10 --warmup 1 --seconds 10 --parallel --threads <N>`
+- Encoding enabled (default; omit `--no-encode`)
 - Each thread configuration run one-by-one (no concurrent benchmark jobs)
 - 10 measured runs per configuration
 - Reported metrics in table: p50 and p90
@@ -21,6 +21,10 @@ Methodology:
   - `bench/results/perf_2026-02-11_t8.log`
 
 ## Results (10s clip, 30 fps, encode on)
+
+Notes:
+- These numbers were captured prior to the v0.3 public switch and are kept for historical reference.
+- For v0.3, re-run the same methodology using the v0.3 `wavyte-bench` scene generator.
 
 | Threads | Wall p50 (ms) | Wall p90 (ms) | Speedup vs 1T (p50) | Render p50 (ms) | Encode write p50 (ms) | Wall p50 / frame (ms) | Render p50 / frame (ms) |
 |---:|---:|---:|---:|---:|---:|---:|---:|

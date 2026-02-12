@@ -349,7 +349,7 @@ Goal: flip exports to v0.3, ship production-ready crate, and validate publish dr
 - Add CLI integration tests (release-only).
 - Validation: canonical verify command set + CLI `--help` run.
 
-- [ ] Commit 8.3: Update `wavyte-bench` for v0.3 session API
+- [x] Commit 8.3: Update `wavyte-bench` for v0.3 session API
 - Ensure benchmark measures stage timings relevant to v0.3.
 - Add perf baseline capture instructions.
 - Validation: canonical verify command set.
