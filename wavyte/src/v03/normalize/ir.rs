@@ -1,5 +1,6 @@
 use crate::foundation::core::Rgba8Premul;
 use crate::foundation::core::{Canvas, Fps};
+use crate::v03::animation::anim::Anim;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx, VarId};
 use crate::v03::normalize::intern::{InternId, StringInterner};
 use serde_json::Value as JsonValue;
@@ -10,6 +11,7 @@ use std::ops::Range;
 pub(crate) struct NormalizedComposition {
     pub(crate) ir: CompositionIR,
     pub(crate) interner: StringInterner,
+    pub(crate) expr_sources: Vec<ExprSourceIR>,
 
     pub(crate) node_id_by_idx: Vec<InternId>,
     pub(crate) node_idx_by_id: HashMap<InternId, NodeIdx>,
@@ -47,6 +49,21 @@ pub(crate) struct LayoutIR {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RegistryBindings {
     // Phase 3/5 bind effect and transition kinds/params to dense IDs.
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueTypeIR {
+    Bool,
+    F64,
+    U64,
+    Color,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ExprSourceIR {
+    pub(crate) target: crate::v03::foundation::ids::PropertyId,
+    pub(crate) value_type: ValueTypeIR,
+    pub(crate) src: InternId,
 }
 
 #[derive(Debug, Clone)]
@@ -106,14 +123,18 @@ pub(crate) struct NodeIR {
 
 #[derive(Debug, Clone)]
 pub(crate) struct NodePropsIR {
-    pub(crate) opacity: AnimIR<f64>,
-    pub(crate) translate: AnimIR<(f64, f64)>,
-    pub(crate) rotation_deg: AnimIR<f64>,
-    pub(crate) scale: AnimIR<(f64, f64)>,
-    pub(crate) anchor: AnimIR<(f64, f64)>,
-    pub(crate) skew_deg: AnimIR<(f64, f64)>,
+    pub(crate) opacity: Anim<f64>,
+    pub(crate) translate_x: Anim<f64>,
+    pub(crate) translate_y: Anim<f64>,
+    pub(crate) rotation_rad: Anim<f64>,
+    pub(crate) scale_x: Anim<f64>,
+    pub(crate) scale_y: Anim<f64>,
+    pub(crate) anchor_x: Anim<f64>,
+    pub(crate) anchor_y: Anim<f64>,
+    pub(crate) skew_x_deg: Anim<f64>,
+    pub(crate) skew_y_deg: Anim<f64>,
 
-    pub(crate) switch_active: Option<AnimIR<u64>>,
+    pub(crate) switch_active: Option<Anim<u64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,30 +214,4 @@ pub(crate) struct TransitionSpecIR {
 pub(crate) struct EffectInstanceIR {
     pub(crate) kind: InternId,
     pub(crate) params: Vec<(InternId, JsonValue)>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum AnimIR<T> {
-    Constant(T),
-    Keyframes(KeyframesIR<T>),
-    Expr(InternId),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct KeyframesIR<T> {
-    pub(crate) keys: Vec<KeyframeIR<T>>,
-    pub(crate) mode: InterpModeIR,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct KeyframeIR<T> {
-    pub(crate) frame: u64,
-    pub(crate) value: T,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) enum InterpModeIR {
-    #[default]
-    Linear,
-    Hold,
 }

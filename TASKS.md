@@ -112,7 +112,7 @@ Goal: land the boundary/runtime split and build deterministic `CompositionIR` wi
 - Add stable conversion to premul RGBA used by render.
 - Validation: canonical verify command set.
 
-Commit 1.8: Implement v0.3 `Anim<T>` core + interpolation presets
+- [x] Commit 1.8: Implement v0.3 `Anim<T>` core + interpolation presets
 - `Anim::Constant`, `Keyframes`, `Procedural`, `Reference(PropertyId)` with full serde.
 - `InterpMode` including cubic bezier and named presets.
 - Spring solver analytical implementation.

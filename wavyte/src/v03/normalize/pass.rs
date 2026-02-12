@@ -1,16 +1,19 @@
 use crate::foundation::core::{Canvas, Fps};
-use crate::v03::animation::anim::{Anim, AnimTagged};
+use crate::v03::animation::anim::{
+    Anim, AnimDef, AnimTaggedDef, InterpMode, Keyframe, Keyframes, Procedural, ProceduralKind,
+};
 use crate::v03::assets::color::ColorDef;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx, VarId};
 use crate::v03::normalize::intern::{InternId, StringInterner};
 use crate::v03::normalize::ir::{
-    AnimIR, AssetIR, CollectionModeIR, CompositionIR, EffectInstanceIR, InterpModeIR, KeyframeIR,
-    KeyframesIR, LayoutIR, MaskIR, MaskModeIR, MaskSourceIR, NodeIR, NodeKindIR, NodePropsIR,
-    NormalizedComposition, RegistryBindings, ShapeIR, TransitionSpecIR, VarValueIR,
+    AssetIR, CollectionModeIR, CompositionIR, EffectInstanceIR, ExprSourceIR, LayoutIR, MaskIR,
+    MaskModeIR, MaskSourceIR, NodeIR, NodeKindIR, NodePropsIR, NormalizedComposition,
+    RegistryBindings, ShapeIR, TransitionSpecIR, ValueTypeIR, VarValueIR,
 };
+use crate::v03::normalize::property::{PropertyIndex, PropertyKey};
 use crate::v03::scene::model::{
     AssetDef, CollectionModeDef, CompositionDef, EffectInstanceDef, MaskDef, MaskModeDef,
-    MaskSourceDef, NodeDef, NodeKindDef, ShapeDef, TransitionSpecDef, VarDef, Vec2Def,
+    MaskSourceDef, NodeDef, NodeKindDef, ShapeDef, TransformDef, TransitionSpecDef, VarDef,
 };
 use crate::v03::schema::validate::{SchemaErrors, validate_composition};
 use std::collections::HashMap;
@@ -41,6 +44,7 @@ pub(crate) fn normalize(def: &CompositionDef) -> Result<NormalizedComposition, N
     validate_composition(def).map_err(NormalizeError::Schema)?;
 
     let mut interner = StringInterner::new();
+    let mut expr_sources = Vec::<ExprSourceIR>::new();
 
     // Assets: deterministic order by BTreeMap key ordering.
     let mut asset_key_by_idx = Vec::with_capacity(def.assets.len());
@@ -78,6 +82,7 @@ pub(crate) fn normalize(def: &CompositionDef) -> Result<NormalizedComposition, N
         &mut nodes,
         &mut node_id_by_idx,
         &mut node_idx_by_id,
+        &mut expr_sources,
     )?;
 
     let ir = CompositionIR {
@@ -102,6 +107,7 @@ pub(crate) fn normalize(def: &CompositionDef) -> Result<NormalizedComposition, N
     Ok(NormalizedComposition {
         ir,
         interner,
+        expr_sources,
         node_id_by_idx,
         node_idx_by_id,
         asset_key_by_idx,
@@ -181,6 +187,7 @@ fn normalize_node(
     nodes: &mut Vec<NodeIR>,
     node_id_by_idx: &mut Vec<InternId>,
     node_idx_by_id: &mut HashMap<InternId, NodeIdx>,
+    expr_sources: &mut Vec<ExprSourceIR>,
 ) -> Result<NodeIdx, NormalizeError> {
     let idx_u32 = u32::try_from(nodes.len()).map_err(|_| NormalizeError::TooManyNodes)?;
     let idx = NodeIdx(idx_u32);
@@ -217,12 +224,16 @@ fn normalize_node(
             composition: serde_json::Value::Null,
         },
         props: NodePropsIR {
-            opacity: AnimIR::Constant(1.0),
-            translate: AnimIR::Constant((0.0, 0.0)),
-            rotation_deg: AnimIR::Constant(0.0),
-            scale: AnimIR::Constant((1.0, 1.0)),
-            anchor: AnimIR::Constant((0.0, 0.0)),
-            skew_deg: AnimIR::Constant((0.0, 0.0)),
+            opacity: Anim::Constant(1.0),
+            translate_x: Anim::Constant(0.0),
+            translate_y: Anim::Constant(0.0),
+            rotation_rad: Anim::Constant(0.0),
+            scale_x: Anim::Constant(1.0),
+            scale_y: Anim::Constant(1.0),
+            anchor_x: Anim::Constant(0.0),
+            anchor_y: Anim::Constant(0.0),
+            skew_x_deg: Anim::Constant(0.0),
+            skew_y_deg: Anim::Constant(0.0),
             switch_active: None,
         },
         effects,
@@ -232,12 +243,14 @@ fn normalize_node(
     });
 
     let (kind, props) = normalize_kind_and_props(
+        idx,
         node,
         interner,
         asset_idx_by_key,
         nodes,
         node_id_by_idx,
         node_idx_by_id,
+        expr_sources,
     )?;
     nodes[idx.0 as usize].kind = kind;
     nodes[idx.0 as usize].props = props;
@@ -245,30 +258,24 @@ fn normalize_node(
     Ok(idx)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn normalize_kind_and_props(
+    self_idx: NodeIdx,
     node: &NodeDef,
     interner: &mut StringInterner,
     asset_idx_by_key: &HashMap<InternId, AssetIdx>,
     nodes: &mut Vec<NodeIR>,
     node_id_by_idx: &mut Vec<InternId>,
     node_idx_by_id: &mut HashMap<InternId, NodeIdx>,
+    expr_sources: &mut Vec<ExprSourceIR>,
 ) -> Result<(NodeKindIR, NodePropsIR), NormalizeError> {
-    let opacity = normalize_anim_f64(&node.opacity, interner);
-    let translate = normalize_anim_vec2(&node.transform.translate, interner);
-    let rotation_deg = normalize_anim_f64(&node.transform.rotation_deg, interner);
-    let scale = normalize_anim_vec2(&node.transform.scale, interner);
-    let anchor = normalize_anim_vec2(&node.transform.anchor, interner);
-    let skew_deg = normalize_anim_vec2(&node.transform.skew_deg, interner);
-
-    let mut props = NodePropsIR {
-        opacity,
-        translate,
-        rotation_deg,
-        scale,
-        anchor,
-        skew_deg,
-        switch_active: None,
-    };
+    let mut props = normalize_props(
+        self_idx,
+        node.transform.clone(),
+        &node.opacity,
+        interner,
+        expr_sources,
+    )?;
 
     let kind = match &node.kind {
         NodeKindDef::Leaf { asset } => {
@@ -286,6 +293,7 @@ fn normalize_kind_and_props(
                     nodes,
                     node_id_by_idx,
                     node_idx_by_id,
+                    expr_sources,
                 )?;
                 child_idxs.push(child_idx);
             }
@@ -307,7 +315,13 @@ fn normalize_kind_and_props(
                 }
                 CollectionModeDef::Stack => CollectionModeIR::Stack,
                 CollectionModeDef::Switch { active } => {
-                    props.switch_active = Some(normalize_anim_u64(active, interner));
+                    props.switch_active = Some(normalize_lane_u64(
+                        self_idx,
+                        PropertyKey::SwitchActiveIndex,
+                        active,
+                        interner,
+                        expr_sources,
+                    )?);
                     CollectionModeIR::Switch
                 }
             };
@@ -390,71 +404,274 @@ fn normalize_shape(s: &ShapeDef, interner: &mut StringInterner) -> ShapeIR {
     }
 }
 
-fn normalize_anim_f64(a: &Anim<f64>, interner: &mut StringInterner) -> AnimIR<f64> {
+fn normalize_props(
+    self_idx: NodeIdx,
+    transform: TransformDef,
+    opacity: &AnimDef<f64>,
+    interner: &mut StringInterner,
+    expr_sources: &mut Vec<ExprSourceIR>,
+) -> Result<NodePropsIR, NormalizeError> {
+    let opacity = normalize_lane_f64(
+        self_idx,
+        PropertyKey::Opacity,
+        opacity,
+        interner,
+        expr_sources,
+    )?;
+
+    let translate_x = normalize_lane_f64(
+        self_idx,
+        PropertyKey::TransformTranslateX,
+        &transform.translate.x,
+        interner,
+        expr_sources,
+    )?;
+    let translate_y = normalize_lane_f64(
+        self_idx,
+        PropertyKey::TransformTranslateY,
+        &transform.translate.y,
+        interner,
+        expr_sources,
+    )?;
+
+    let rotation_rad = normalize_lane_f64_deg_to_rad(
+        self_idx,
+        PropertyKey::TransformRotationRad,
+        &transform.rotation_deg,
+        interner,
+        expr_sources,
+    )?;
+
+    let scale_x = normalize_lane_f64(
+        self_idx,
+        PropertyKey::TransformScaleX,
+        &transform.scale.x,
+        interner,
+        expr_sources,
+    )?;
+    let scale_y = normalize_lane_f64(
+        self_idx,
+        PropertyKey::TransformScaleY,
+        &transform.scale.y,
+        interner,
+        expr_sources,
+    )?;
+
+    let anchor_x = normalize_lane_f64(
+        self_idx,
+        PropertyKey::TransformAnchorX,
+        &transform.anchor.x,
+        interner,
+        expr_sources,
+    )?;
+    let anchor_y = normalize_lane_f64(
+        self_idx,
+        PropertyKey::TransformAnchorY,
+        &transform.anchor.y,
+        interner,
+        expr_sources,
+    )?;
+
+    let skew_x_deg = normalize_lane_f64(
+        self_idx,
+        PropertyKey::TransformSkewX,
+        &transform.skew_deg.x,
+        interner,
+        expr_sources,
+    )?;
+    let skew_y_deg = normalize_lane_f64(
+        self_idx,
+        PropertyKey::TransformSkewY,
+        &transform.skew_deg.y,
+        interner,
+        expr_sources,
+    )?;
+
+    Ok(NodePropsIR {
+        opacity,
+        translate_x,
+        translate_y,
+        rotation_rad,
+        scale_x,
+        scale_y,
+        anchor_x,
+        anchor_y,
+        skew_x_deg,
+        skew_y_deg,
+        switch_active: None,
+    })
+}
+
+fn normalize_lane_f64(
+    self_idx: NodeIdx,
+    key: PropertyKey,
+    a: &AnimDef<f64>,
+    interner: &mut StringInterner,
+    expr_sources: &mut Vec<ExprSourceIR>,
+) -> Result<Anim<f64>, NormalizeError> {
+    normalize_lane_f64_scaled(self_idx, key, a, 1.0, interner, expr_sources)
+}
+
+fn normalize_lane_f64_deg_to_rad(
+    self_idx: NodeIdx,
+    key: PropertyKey,
+    a: &AnimDef<f64>,
+    interner: &mut StringInterner,
+    expr_sources: &mut Vec<ExprSourceIR>,
+) -> Result<Anim<f64>, NormalizeError> {
+    const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
     match a {
-        Anim::Constant(x) => AnimIR::Constant(*x),
-        Anim::Tagged(t) => match t {
-            AnimTagged::Keyframes(k) => AnimIR::Keyframes(KeyframesIR {
+        AnimDef::Constant(v) => Ok(Anim::Constant(v * DEG_TO_RAD)),
+        AnimDef::Tagged(tag) => match tag {
+            AnimTaggedDef::Keyframes(k) => Ok(Anim::Keyframes(Keyframes {
                 keys: k
                     .keys
                     .iter()
-                    .map(|k| KeyframeIR {
-                        frame: k.frame,
-                        value: k.value,
+                    .map(|kk| Keyframe {
+                        frame: kk.frame,
+                        value: kk.value * DEG_TO_RAD,
                     })
                     .collect(),
-                mode: match k.mode {
-                    crate::v03::animation::anim::InterpMode::Linear => InterpModeIR::Linear,
-                    crate::v03::animation::anim::InterpMode::Hold => InterpModeIR::Hold,
-                },
-            }),
-            AnimTagged::Expr(s) => AnimIR::Expr(interner.intern(s)),
+                mode: InterpMode::from(k.mode),
+                default: k.default.map(|v| v * DEG_TO_RAD),
+            })),
+            AnimTaggedDef::Procedural(p) => Ok(Anim::Procedural(Procedural::new(
+                ProceduralKind::from(scale_procedural(p.clone(), DEG_TO_RAD)),
+            ))),
+            AnimTaggedDef::Expr(s) => {
+                let pid = PropertyIndex::property_id(self_idx, key);
+                let wrapped = wrap_scale_expr(s, DEG_TO_RAD);
+                let src = interner.intern(&wrapped);
+                expr_sources.push(ExprSourceIR {
+                    target: pid,
+                    value_type: ValueTypeIR::F64,
+                    src,
+                });
+                Ok(Anim::Reference(pid))
+            }
         },
     }
 }
 
-fn normalize_anim_u64(a: &Anim<u64>, interner: &mut StringInterner) -> AnimIR<u64> {
+fn normalize_lane_f64_scaled(
+    self_idx: NodeIdx,
+    key: PropertyKey,
+    a: &AnimDef<f64>,
+    scale: f64,
+    interner: &mut StringInterner,
+    expr_sources: &mut Vec<ExprSourceIR>,
+) -> Result<Anim<f64>, NormalizeError> {
     match a {
-        Anim::Constant(x) => AnimIR::Constant(*x),
-        Anim::Tagged(t) => match t {
-            AnimTagged::Keyframes(k) => AnimIR::Keyframes(KeyframesIR {
+        AnimDef::Constant(v) => Ok(Anim::Constant(v * scale)),
+        AnimDef::Tagged(tag) => match tag {
+            AnimTaggedDef::Keyframes(k) => Ok(Anim::Keyframes(Keyframes {
                 keys: k
                     .keys
                     .iter()
-                    .map(|k| KeyframeIR {
-                        frame: k.frame,
-                        value: k.value,
+                    .map(|kk| Keyframe {
+                        frame: kk.frame,
+                        value: kk.value * scale,
                     })
                     .collect(),
-                mode: match k.mode {
-                    crate::v03::animation::anim::InterpMode::Linear => InterpModeIR::Linear,
-                    crate::v03::animation::anim::InterpMode::Hold => InterpModeIR::Hold,
-                },
-            }),
-            AnimTagged::Expr(s) => AnimIR::Expr(interner.intern(s)),
+                mode: InterpMode::from(k.mode),
+                default: k.default.map(|v| v * scale),
+            })),
+            AnimTaggedDef::Procedural(p) => Ok(Anim::Procedural(Procedural::new(
+                ProceduralKind::from(scale_procedural(p.clone(), scale)),
+            ))),
+            AnimTaggedDef::Expr(s) => {
+                let pid = PropertyIndex::property_id(self_idx, key);
+                let src = interner.intern(s);
+                expr_sources.push(ExprSourceIR {
+                    target: pid,
+                    value_type: ValueTypeIR::F64,
+                    src,
+                });
+                Ok(Anim::Reference(pid))
+            }
         },
     }
 }
 
-fn normalize_anim_vec2(a: &Anim<Vec2Def>, interner: &mut StringInterner) -> AnimIR<(f64, f64)> {
+fn normalize_lane_u64(
+    self_idx: NodeIdx,
+    key: PropertyKey,
+    a: &AnimDef<u64>,
+    interner: &mut StringInterner,
+    expr_sources: &mut Vec<ExprSourceIR>,
+) -> Result<Anim<u64>, NormalizeError> {
     match a {
-        Anim::Constant(v) => AnimIR::Constant((v.x, v.y)),
-        Anim::Tagged(t) => match t {
-            AnimTagged::Keyframes(k) => AnimIR::Keyframes(KeyframesIR {
+        AnimDef::Constant(v) => Ok(Anim::Constant(*v)),
+        AnimDef::Tagged(tag) => match tag {
+            AnimTaggedDef::Keyframes(k) => Ok(Anim::Keyframes(Keyframes {
                 keys: k
                     .keys
                     .iter()
-                    .map(|k| KeyframeIR {
-                        frame: k.frame,
-                        value: (k.value.x, k.value.y),
+                    .map(|kk| Keyframe {
+                        frame: kk.frame,
+                        value: kk.value,
                     })
                     .collect(),
-                mode: match k.mode {
-                    crate::v03::animation::anim::InterpMode::Linear => InterpModeIR::Linear,
-                    crate::v03::animation::anim::InterpMode::Hold => InterpModeIR::Hold,
-                },
-            }),
-            AnimTagged::Expr(s) => AnimIR::Expr(interner.intern(s)),
+                mode: InterpMode::from(k.mode),
+                default: k.default,
+            })),
+            AnimTaggedDef::Procedural(_p) => Ok(Anim::Constant(0)),
+            AnimTaggedDef::Expr(s) => {
+                let pid = PropertyIndex::property_id(self_idx, key);
+                let src = interner.intern(s);
+                expr_sources.push(ExprSourceIR {
+                    target: pid,
+                    value_type: ValueTypeIR::U64,
+                    src,
+                });
+                Ok(Anim::Reference(pid))
+            }
+        },
+    }
+}
+
+fn wrap_scale_expr(expr: &str, scale: f64) -> String {
+    // Normalize to a single `=<expr>` form.
+    let e = expr.trim();
+    let inner = e.strip_prefix('=').unwrap_or(e);
+    format!("=({inner})*{scale}")
+}
+
+fn scale_procedural(
+    p: crate::v03::animation::anim::ProceduralDef,
+    scale: f64,
+) -> crate::v03::animation::anim::ProceduralDef {
+    use crate::v03::animation::anim::{ProcScalarDef, ProceduralDef};
+    fn scale_scalar(s: ProcScalarDef, scale: f64) -> ProcScalarDef {
+        match s {
+            ProcScalarDef::Sine {
+                amp,
+                freq_hz,
+                phase,
+                offset,
+            } => ProcScalarDef::Sine {
+                amp: amp * scale,
+                freq_hz,
+                phase,
+                offset: offset * scale,
+            },
+            ProcScalarDef::Noise1d {
+                amp,
+                freq_hz,
+                offset,
+            } => ProcScalarDef::Noise1d {
+                amp: amp * scale,
+                freq_hz,
+                offset: offset * scale,
+            },
+        }
+    }
+
+    match p {
+        ProceduralDef::Scalar(s) => ProceduralDef::Scalar(scale_scalar(s, scale)),
+        ProceduralDef::Vec2 { x, y } => ProceduralDef::Vec2 {
+            x: scale_scalar(x, scale),
+            y: scale_scalar(y, scale),
         },
     }
 }
@@ -462,7 +679,7 @@ fn normalize_anim_vec2(a: &Anim<Vec2Def>, interner: &mut StringInterner) -> Anim
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v03::animation::anim::Anim;
+    use crate::v03::animation::anim::AnimDef;
     use crate::v03::scene::model::{CanvasDef, FpsDef, NodeKindDef, TransformDef};
     use std::collections::BTreeMap;
 
@@ -498,7 +715,7 @@ mod tests {
                         },
                         range: [0, 10],
                         transform: TransformDef::default(),
-                        opacity: Anim::Constant(1.0),
+                        opacity: AnimDef::Constant(1.0),
                         effects: vec![],
                         mask: None,
                         transition_in: None,
@@ -507,7 +724,7 @@ mod tests {
                 },
                 range: [0, 10],
                 transform: TransformDef::default(),
-                opacity: Anim::Constant(1.0),
+                opacity: AnimDef::Constant(1.0),
                 effects: vec![],
                 mask: None,
                 transition_in: None,

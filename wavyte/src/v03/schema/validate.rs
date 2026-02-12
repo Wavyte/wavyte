@@ -310,7 +310,7 @@ fn validate_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v03::animation::anim::Anim;
+    use crate::v03::animation::anim::AnimDef;
     use crate::v03::scene::model::{
         AssetDef, CanvasDef, FpsDef, MaskDef, MaskModeDef, NodeKindDef,
     };
@@ -343,7 +343,7 @@ mod tests {
                 },
                 range: [0, 60],
                 transform: Default::default(),
-                opacity: Anim::Constant(1.0),
+                opacity: AnimDef::Constant(1.0),
                 effects: vec![],
                 mask: None,
                 transition_in: None,
@@ -380,7 +380,7 @@ mod tests {
                         },
                         range: [0, 10],
                         transform: Default::default(),
-                        opacity: Anim::Constant(1.0),
+                        opacity: AnimDef::Constant(1.0),
                         effects: vec![],
                         mask: None,
                         transition_in: None,
@@ -393,7 +393,7 @@ mod tests {
                         },
                         range: [0, 10],
                         transform: Default::default(),
-                        opacity: Anim::Constant(1.0),
+                        opacity: AnimDef::Constant(1.0),
                         effects: vec![],
                         mask: None,
                         transition_in: None,
@@ -403,7 +403,7 @@ mod tests {
             },
             range: [0, 60],
             transform: Default::default(),
-            opacity: Anim::Constant(1.0),
+            opacity: AnimDef::Constant(1.0),
             effects: vec![],
             mask: None,
             transition_in: None,
@@ -436,7 +436,7 @@ mod tests {
                 },
                 range: [2, 10],
                 transform: Default::default(),
-                opacity: Anim::Constant(1.0),
+                opacity: AnimDef::Constant(1.0),
                 effects: vec![],
                 mask: None,
                 transition_in: None,

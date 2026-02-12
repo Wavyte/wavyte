@@ -1,4 +1,4 @@
-use crate::v03::animation::anim::Anim;
+use crate::v03::animation::anim::AnimDef;
 use crate::v03::assets::color::ColorDef;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -50,21 +50,55 @@ pub(crate) struct EdgesDef {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TransformDef {
-    pub(crate) translate: Anim<Vec2Def>,
-    pub(crate) rotation_deg: Anim<f64>,
-    pub(crate) scale: Anim<Vec2Def>,
-    pub(crate) anchor: Anim<Vec2Def>,
-    pub(crate) skew_deg: Anim<Vec2Def>,
+    pub(crate) translate: Vec2AnimDef,
+    pub(crate) rotation_deg: AnimDef<f64>,
+    pub(crate) scale: Vec2AnimDef,
+    pub(crate) anchor: Vec2AnimDef,
+    pub(crate) skew_deg: Vec2AnimDef,
 }
 
 impl Default for TransformDef {
     fn default() -> Self {
         Self {
-            translate: Anim::Constant(Vec2Def { x: 0.0, y: 0.0 }),
-            rotation_deg: Anim::Constant(0.0),
-            scale: Anim::Constant(Vec2Def { x: 1.0, y: 1.0 }),
-            anchor: Anim::Constant(Vec2Def { x: 0.0, y: 0.0 }),
-            skew_deg: Anim::Constant(Vec2Def { x: 0.0, y: 0.0 }),
+            translate: Vec2AnimDef::constant(0.0, 0.0),
+            rotation_deg: AnimDef::Constant(0.0),
+            scale: Vec2AnimDef::constant(1.0, 1.0),
+            anchor: Vec2AnimDef::constant(0.0, 0.0),
+            skew_deg: Vec2AnimDef::constant(0.0, 0.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct Vec2AnimDef {
+    pub(crate) x: AnimDef<f64>,
+    pub(crate) y: AnimDef<f64>,
+}
+
+impl Vec2AnimDef {
+    pub(crate) fn constant(x: f64, y: f64) -> Self {
+        Self {
+            x: AnimDef::Constant(x),
+            y: AnimDef::Constant(y),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Vec2AnimDef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Arr([AnimDef<f64>; 2]),
+            Obj { x: AnimDef<f64>, y: AnimDef<f64> },
+        }
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Arr([x, y]) => Ok(Self { x, y }),
+            Repr::Obj { x, y } => Ok(Self { x, y }),
         }
     }
 }
@@ -102,7 +136,7 @@ pub(crate) struct NodeDef {
     #[serde(default)]
     pub(crate) transform: TransformDef,
     #[serde(default = "default_opacity")]
-    pub(crate) opacity: Anim<f64>,
+    pub(crate) opacity: AnimDef<f64>,
 
     #[serde(default)]
     pub(crate) effects: Vec<EffectInstanceDef>,
@@ -114,8 +148,8 @@ pub(crate) struct NodeDef {
     pub(crate) transition_out: Option<TransitionSpecDef>,
 }
 
-fn default_opacity() -> Anim<f64> {
-    Anim::Constant(1.0)
+fn default_opacity() -> AnimDef<f64> {
+    AnimDef::Constant(1.0)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +173,7 @@ pub(crate) enum CollectionModeDef {
     Group,
     Sequence,
     Stack,
-    Switch { active: Anim<u64> },
+    Switch { active: AnimDef<u64> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
