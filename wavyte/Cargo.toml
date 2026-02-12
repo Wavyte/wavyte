@@ -18,6 +18,7 @@ path = "src/lib.rs"
 [features]
 default = []
 media-ffmpeg = []
+alloc-track = ["dep:stats_alloc"]
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
@@ -31,6 +32,7 @@ parley = { version = "0.7.0", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1.11.0"
+stats_alloc = { version = "0.1.10", optional = true }
 thiserror = "2"
 tracing = { version = "0.1", features = ["attributes"] }
 usvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }

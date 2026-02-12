@@ -64,7 +64,7 @@ The repo runs all “CI” locally via scripts in `scripts/` (no GitHub Actions 
   - Call it from `scripts/verify_release.sh`.
   - Validation: run `bash scripts/verify_release.sh`.
 
-- [ ] Commit 0.4: Add `alloc-track` feature flag scaffold
+- [x] Commit 0.4: Add `alloc-track` feature flag scaffold
   - Add `wavyte` feature `alloc-track` and an allocator counter module behind it.
   - Add a no-op default implementation when the feature is off.
   - Validation: run `bash scripts/verify_release.sh`.
