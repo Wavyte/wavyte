@@ -86,7 +86,7 @@ Goal: land the boundary/runtime split and build deterministic `CompositionIR` wi
 - Add `normalize/intern.rs` string interner and stable id allocation.
 - Validation: canonical verify command set.
 
-- [ ] Commit 1.3: Add `PropertyKey` and `(NodeIdx, PropertyKey) -> PropertyId`
+- [x] Commit 1.3: Add `PropertyKey` and `(NodeIdx, PropertyKey) -> PropertyId`
 - Define the stable v0.3 lane set from `wavyte_v03_proposal_final.md` section 4.4 and 7.1.
 - Add deterministic ordering rules for ids and property ids.
 - Validation: canonical verify command set.
