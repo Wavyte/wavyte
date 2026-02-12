@@ -6,10 +6,13 @@ use crate::v03::normalize::ir::CompositionIR;
 
 /// A rendered frame as premultiplied RGBA8 bytes.
 #[derive(Clone, Debug)]
-pub(crate) struct FrameRGBA {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) data: Vec<u8>,
+pub struct FrameRGBA {
+    /// Frame width in pixels.
+    pub width: u32,
+    /// Frame height in pixels.
+    pub height: u32,
+    /// Premultiplied RGBA8 bytes, tightly packed, row-major.
+    pub data: Vec<u8>,
 }
 
 /// Backend contract for executing a v0.3 [`RenderPlan`] into pixels.

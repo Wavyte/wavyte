@@ -1,10 +1,5 @@
 use std::path::PathBuf;
 
-use wavyte::{
-    Anim, Asset, BlendMode, Canvas, Clip, ClipProps, Composition, Fps, FrameIndex, FrameRange,
-    PathAsset, Track, Transform2D,
-};
-
 #[test]
 fn cli_frame_writes_png() {
     let dir = PathBuf::from("target").join("cli_smoke");
@@ -14,51 +9,23 @@ fn cli_frame_writes_png() {
     let out_path = dir.join("out.png");
     let _ = std::fs::remove_file(&out_path);
 
-    let mut assets = std::collections::BTreeMap::new();
-    assets.insert(
-        "p0".to_string(),
-        Asset::Path(PathAsset {
-            svg_path_d: "M0,0 L40,0 L40,40 L0,40 Z".to_string(),
-        }),
-    );
-
-    let comp = Composition {
-        fps: Fps::new(30, 1).unwrap(),
-        canvas: Canvas {
-            width: 64,
-            height: 64,
-        },
-        duration: FrameIndex(2),
-        assets,
-        tracks: vec![Track {
-            name: "main".to_string(),
-            z_base: 0,
-            layout_mode: wavyte::LayoutMode::Absolute,
-            layout_gap_px: 0.0,
-            layout_padding: wavyte::Edges::default(),
-            layout_align_x: wavyte::LayoutAlignX::Start,
-            layout_align_y: wavyte::LayoutAlignY::Start,
-            layout_grid_columns: 2,
-            clips: vec![Clip {
-                id: "c0".to_string(),
-                asset: "p0".to_string(),
-                range: FrameRange::new(FrameIndex(0), FrameIndex(2)).unwrap(),
-                props: ClipProps {
-                    transform: Anim::constant(Transform2D::default()),
-                    opacity: Anim::constant(1.0),
-                    blend: BlendMode::Normal,
-                },
-                z_offset: 0,
-                effects: vec![],
-                transition_in: None,
-                transition_out: None,
-            }],
-        }],
-        seed: 1,
-    };
-
-    let f = std::fs::File::create(&comp_path).unwrap();
-    serde_json::to_writer_pretty(f, &comp).unwrap();
+    let json = r##"
+{
+  "version": "0.3",
+  "canvas": { "width": 64, "height": 64 },
+  "fps": { "num": 30, "den": 1 },
+  "duration": 2,
+  "assets": {
+    "solid": { "solid_rect": { "color": "#ff3366" } }
+  },
+  "root": {
+    "id": "root",
+    "kind": { "leaf": { "asset": "solid" } },
+    "range": [0, 2]
+  }
+}
+"##;
+    std::fs::write(&comp_path, json).unwrap();
 
     let comp_arg = comp_path.to_string_lossy().to_string();
     let out_arg = out_path.to_string_lossy().to_string();

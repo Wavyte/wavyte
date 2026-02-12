@@ -10,9 +10,10 @@ use crate::v03::expression::compile::compile_expr_program;
 use crate::v03::expression::program::ExprProgram;
 use crate::v03::normalize::ir::NormalizedComposition;
 use crate::v03::normalize::pass::normalize;
-use crate::v03::render::backend::{FrameRGBA, RenderBackendV03};
+use crate::v03::render::backend::FrameRGBA;
+use crate::v03::render::backend::RenderBackendV03;
 use crate::v03::render::cpu::{CpuBackendOpts, CpuBackendV03};
-use crate::v03::scene::model::CompositionDef;
+use crate::v03::scene::composition::Composition;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,14 +21,21 @@ use std::sync::{Arc, mpsc};
 
 const MAX_REORDER_BUFFER_BYTES: u64 = 128 * 1024 * 1024;
 
+/// Options controlling `RenderSession` range rendering behavior.
 #[derive(Clone, Debug)]
-pub(crate) struct RenderSessionOpts {
-    pub(crate) parallel: bool,
-    pub(crate) chunk_size: usize,
-    pub(crate) threads: Option<usize>,
-    pub(crate) static_frame_elision: bool,
-    pub(crate) channel_capacity: usize,
-    pub(crate) enable_audio: bool,
+pub struct RenderSessionOpts {
+    /// Enable frame-level parallelism (rayon), using a dedicated thread pool.
+    pub parallel: bool,
+    /// Chunk size used by the render->encode streaming pipeline.
+    pub chunk_size: usize,
+    /// Override the number of rayon worker threads. `None` uses rayon defaults.
+    pub threads: Option<usize>,
+    /// Enable static-frame elision (skip rendering duplicate evaluated frames within a chunk).
+    pub static_frame_elision: bool,
+    /// Bounded channel capacity between render workers and the encoder thread.
+    pub channel_capacity: usize,
+    /// Enable audio mixing for `render_range` (mixed once per range, outside the per-frame loop).
+    pub enable_audio: bool,
 }
 
 impl Default for RenderSessionOpts {
@@ -43,14 +51,22 @@ impl Default for RenderSessionOpts {
     }
 }
 
+/// Range render statistics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct RenderStats {
-    pub(crate) frames_total: u64,
-    pub(crate) frames_rendered: u64,
-    pub(crate) frames_elided: u64,
+pub struct RenderStats {
+    /// Total frames in the requested range.
+    pub frames_total: u64,
+    /// Frames actually rendered (may be < total when static-frame elision is enabled).
+    pub frames_rendered: u64,
+    /// Frames elided due to static-frame elision.
+    pub frames_elided: u64,
 }
 
-pub(crate) struct RenderSession {
+/// Session-oriented renderer for v0.3 compositions.
+///
+/// A session front-loads normalization and expression compilation, then provides efficient per-frame
+/// execution for single frames and ranges.
+pub struct RenderSession {
     norm: NormalizedComposition,
     expr_program: ExprProgram,
     eval: Evaluator,
@@ -60,11 +76,14 @@ pub(crate) struct RenderSession {
 }
 
 impl RenderSession {
-    pub(crate) fn new(
-        def: &CompositionDef,
+    /// Construct a new v0.3 render session.
+    pub fn new(
+        comp: &Composition,
         assets_root: impl Into<PathBuf>,
         opts: RenderSessionOpts,
     ) -> WavyteResult<Self> {
+        comp.validate()?;
+        let def = comp.def();
         let norm = normalize(def).map_err(|e| WavyteError::validation(e.to_string()))?;
         let expr_program =
             compile_expr_program(&norm).map_err(|e| WavyteError::validation(e.to_string()))?;
@@ -86,10 +105,11 @@ impl RenderSession {
         &self.norm.interner
     }
 
-    pub(crate) fn render_frame(
+    /// Render a single frame using the built-in CPU backend.
+    pub fn render_frame(
         &mut self,
         frame: FrameIndex,
-        backend: &mut dyn RenderBackendV03,
+        backend_opts: CpuBackendOpts,
     ) -> WavyteResult<FrameRGBA> {
         if frame.0 >= self.norm.ir.duration_frames {
             return Err(WavyteError::validation(
@@ -102,10 +122,16 @@ impl RenderSession {
             .eval_frame(&self.norm.ir, frame.0)
             .map_err(|e| WavyteError::evaluation(e.to_string()))?;
         let plan = compile_frame(&self.norm.ir, g);
+        let mut backend = CpuBackendV03::new(self.assets_root.clone(), backend_opts);
         backend.render_plan(&self.norm.ir, &self.norm.interner, g, &plan)
     }
 
-    pub(crate) fn render_range(
+    /// Render a frame range and stream frames into a sink.
+    ///
+    /// The sink receives frames in strictly increasing frame index order. When `parallel` is
+    /// enabled, out-of-order worker completion is deterministically reordered at the sink boundary
+    /// (bounded channel backpressure).
+    pub fn render_range(
         &mut self,
         range: FrameRange,
         backend_opts: CpuBackendOpts,
@@ -543,7 +569,10 @@ mod tests {
     use super::*;
     use crate::v03::animation::anim::{AnimDef, AnimTaggedDef};
     use crate::v03::encode::sink::InMemorySink;
-    use crate::v03::scene::model::{AssetDef, CanvasDef, FpsDef, NodeDef, NodeKindDef};
+    use crate::v03::scene::composition::Composition;
+    use crate::v03::scene::model::{
+        AssetDef, CanvasDef, CompositionDef, FpsDef, NodeDef, NodeKindDef,
+    };
     use std::collections::BTreeMap;
 
     fn make_comp(duration: u64, opacity: AnimDef<f64>) -> CompositionDef {
@@ -580,12 +609,12 @@ mod tests {
 
     #[test]
     fn render_range_parallel_inmemory_is_ordered_and_varies_by_frame() {
-        let def = make_comp(
+        let comp = Composition::from_def(make_comp(
             8,
             AnimDef::Tagged(AnimTaggedDef::Expr("=time.progress".to_owned())),
-        );
+        ));
         let mut sess = RenderSession::new(
-            &def,
+            &comp,
             std::env::temp_dir(),
             RenderSessionOpts {
                 parallel: true,
@@ -630,9 +659,9 @@ mod tests {
 
     #[test]
     fn render_range_static_frame_elision_reuses_payloads() {
-        let def = make_comp(8, AnimDef::Constant(1.0));
+        let comp = Composition::from_def(make_comp(8, AnimDef::Constant(1.0)));
         let mut sess = RenderSession::new(
-            &def,
+            &comp,
             std::env::temp_dir(),
             RenderSessionOpts {
                 parallel: true,
@@ -673,17 +702,17 @@ mod tests {
 
     #[test]
     fn render_range_parallel_matches_sequential_output() {
-        let def = make_comp(
+        let comp = Composition::from_def(make_comp(
             8,
             AnimDef::Tagged(AnimTaggedDef::Expr("=time.progress".to_owned())),
-        );
+        ));
         let range = FrameRange {
             start: FrameIndex(0),
             end: FrameIndex(8),
         };
 
         let mut sess_seq = RenderSession::new(
-            &def,
+            &comp,
             std::env::temp_dir(),
             RenderSessionOpts {
                 parallel: false,
@@ -701,7 +730,7 @@ mod tests {
             .unwrap();
 
         let mut sess_par = RenderSession::new(
-            &def,
+            &comp,
             std::env::temp_dir(),
             RenderSessionOpts {
                 parallel: true,

@@ -18,10 +18,19 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Options for the v0.3 CPU backend.
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct CpuBackendOpts {
+pub struct CpuBackendOpts {
     pub(crate) pool: SurfacePoolOpts,
     pub(crate) clear_rgba: Option<[u8; 4]>,
+}
+
+impl CpuBackendOpts {
+    /// Return options with a configured clear color for the final output surface.
+    pub fn with_clear_rgba(mut self, clear: Option<[u8; 4]>) -> Self {
+        self.clear_rgba = clear;
+        self
+    }
 }
 
 #[derive(Clone)]

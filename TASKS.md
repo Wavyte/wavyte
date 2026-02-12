@@ -340,37 +340,37 @@ Goal: sink-based streaming and audio mixing outside per-frame loop.
 
 Goal: flip exports to v0.3, ship production-ready crate, and validate publish dry run.
 
-Commit 8.1: Add v0.3 JSON fixtures and example scenes
+- [x] Commit 8.1: Add v0.3 JSON fixtures and example scenes
 - Add a minimal set of reference v0.3 JSON compositions used by tests and CLI smoke.
 - Validation: canonical verify command set.
 
-Commit 8.2: Update `wavyte-cli` to v0.3
+- [x] Commit 8.2: Update `wavyte-cli` to v0.3
 - CLI loads v0.3 JSON, validates schema, prepares assets, renders frame and MP4.
 - Add CLI integration tests (release-only).
 - Validation: canonical verify command set + CLI `--help` run.
 
-Commit 8.3: Update `wavyte-bench` for v0.3 session API
+- [ ] Commit 8.3: Update `wavyte-bench` for v0.3 session API
 - Ensure benchmark measures stage timings relevant to v0.3.
 - Add perf baseline capture instructions.
 - Validation: canonical verify command set.
 
-Commit 8.4: Remove or quarantine v0.2.1 public exports
+- [ ] Commit 8.4: Remove or quarantine v0.2.1 public exports
 - Switch `wavyte/src/lib.rs` exports to v0.3 API surface.
 - Keep v0.2.1 code only if needed for historical reference, but do not expose it publicly.
 - Validation: canonical verify command set.
 
-Commit 8.5: Hardening pass (docs, errors, determinism)
+- [ ] Commit 8.5: Hardening pass (docs, errors, determinism)
 - Ensure all public APIs have docs.
 - Ensure validation errors are structured and actionable.
 - Ensure plan determinism and fingerprints are stable.
 - Validation: canonical verify command set.
 
-Commit 8.6: Version bump to `0.3.0` and docs update
+- [ ] Commit 8.6: Version bump to `0.3.0` and docs update
 - Update `wavyte/Cargo.toml` and related version metadata.
 - Update `README.md` with v0.3 usage.
 - Validation: canonical verify command set.
 
-Commit 8.7: Publish dry run validation (production-ready endpoint)
+- [ ] Commit 8.7: Publish dry run validation (production-ready endpoint)
 - Run and record results in the PR description/notes:
   - `cargo publish -p wavyte --dry-run`
   - `cargo package -p wavyte`

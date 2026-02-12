@@ -5,46 +5,63 @@ use std::path::PathBuf;
 
 /// Configuration provided to a [`FrameSink`] at the start of a range render.
 #[derive(Debug, Clone)]
-pub(crate) struct SinkConfig {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) fps: Fps,
+pub struct SinkConfig {
+    /// Output width in pixels.
+    pub width: u32,
+    /// Output height in pixels.
+    pub height: u32,
+    /// Output frames-per-second.
+    pub fps: Fps,
     /// Optional external raw PCM audio file input.
-    pub(crate) audio: Option<AudioInputConfig>,
+    pub audio: Option<AudioInputConfig>,
 }
 
+/// Raw PCM audio input configuration for sinks that support audio encoding.
 #[derive(Debug, Clone)]
-pub(crate) struct AudioInputConfig {
-    pub(crate) path: PathBuf,
-    pub(crate) sample_rate: u32,
-    pub(crate) channels: u16,
+pub struct AudioInputConfig {
+    /// Path to interleaved `f32le` PCM data.
+    pub path: PathBuf,
+    /// Sample rate in Hz (v0.3 default is 48_000).
+    pub sample_rate: u32,
+    /// Channel count (v0.3 default is 2).
+    pub channels: u16,
 }
 
 /// Sink contract for consuming rendered frames in timeline order.
 ///
 /// Ordering contract: `push_frame` is called in strictly increasing `FrameIndex` order within the
 /// requested render range.
-pub(crate) trait FrameSink: Send {
+pub trait FrameSink: Send {
+    /// Called once before any frames are pushed.
     fn begin(&mut self, cfg: SinkConfig) -> WavyteResult<()>;
+    /// Push one frame in strictly increasing timeline order.
     fn push_frame(&mut self, idx: FrameIndex, frame: &FrameRGBA) -> WavyteResult<()>;
+    /// Called once after the last frame is pushed.
     fn end(&mut self) -> WavyteResult<()>;
 }
 
 /// In-memory sink for tests and debugging.
 #[derive(Debug, Default)]
-pub(crate) struct InMemorySink {
+pub struct InMemorySink {
     cfg: Option<SinkConfig>,
     /// Frames in timeline order.
     pub(crate) frames: Vec<(FrameIndex, FrameRGBA)>,
 }
 
 impl InMemorySink {
-    pub(crate) fn new() -> Self {
+    /// Create a new in-memory sink.
+    pub fn new() -> Self {
         Self::default()
     }
 
-    pub(crate) fn config(&self) -> Option<SinkConfig> {
+    /// Return the sink configuration captured in `begin`, if any.
+    pub fn config(&self) -> Option<SinkConfig> {
         self.cfg.clone()
+    }
+
+    /// Borrow the captured frames.
+    pub fn frames(&self) -> &[(FrameIndex, FrameRGBA)] {
+        &self.frames
     }
 }
 

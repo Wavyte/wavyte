@@ -9,15 +9,18 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 
 /// Options for [`FfmpegSink`] MP4 output.
 #[derive(Clone, Debug)]
-pub(crate) struct FfmpegSinkOpts {
-    pub(crate) out_path: PathBuf,
-    pub(crate) overwrite: bool,
+pub struct FfmpegSinkOpts {
+    /// Output MP4 file path.
+    pub out_path: PathBuf,
+    /// Overwrite output file if it already exists.
+    pub overwrite: bool,
     /// Background color used to flatten alpha (RGBA8, straight alpha).
-    pub(crate) bg_rgba: [u8; 4],
+    pub bg_rgba: [u8; 4],
 }
 
 impl FfmpegSinkOpts {
-    pub(crate) fn new(out_path: impl Into<PathBuf>) -> Self {
+    /// Create options for outputting an MP4 to `out_path`.
+    pub fn new(out_path: impl Into<PathBuf>) -> Self {
         Self {
             out_path: out_path.into(),
             overwrite: true,
@@ -29,7 +32,7 @@ impl FfmpegSinkOpts {
 /// v0.3 sink that spawns the system `ffmpeg` and streams raw frames to stdin.
 ///
 /// Audio is optional and provided through `SinkConfig.audio`.
-pub(crate) struct FfmpegSink {
+pub struct FfmpegSink {
     opts: FfmpegSinkOpts,
 
     child: Option<Child>,
@@ -42,7 +45,8 @@ pub(crate) struct FfmpegSink {
 }
 
 impl FfmpegSink {
-    pub(crate) fn new(opts: FfmpegSinkOpts) -> Self {
+    /// Create a new sink that streams into `ffmpeg`.
+    pub fn new(opts: FfmpegSinkOpts) -> Self {
         Self {
             opts,
             child: None,

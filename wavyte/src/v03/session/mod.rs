@@ -1,3 +1,4 @@
 //! v0.3 session-oriented rendering API.
 
-pub(crate) mod render_session;
+/// Render session entrypoint for v0.3 compositions.
+pub mod render_session;
