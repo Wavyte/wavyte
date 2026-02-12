@@ -152,47 +152,47 @@ Goal: compiled, typed, id-addressed expressions with topo evaluation and cycle e
 
 Goal: allocation-free steady-state evaluation producing `EvaluatedGraph` + `RenderUnit`s.
 
-Commit 3.1: Define `NodeTimeCtx` computation and rules
+- [x] Commit 3.1: Define `NodeTimeCtx` computation and rules
 - Implement per-frame `NodeTimeCtx` for all nodes (local frame + duration).
 - Ensure `Sequence` remapping and clamping semantics match spec.
 - Validation: canonical verify command set.
 
-Commit 3.2: Property evaluation runtime
+- [ ] Commit 3.2: Property evaluation runtime
 - Implement property program execution in topo order using `NodeTimeCtx` for `time.*`.
 - Implement `SampleNodeLane` programs (sampling literal anims for expression dependencies).
 - Validation: canonical verify command set.
 
-Commit 3.3: Visibility selection for layout and eval
+- [ ] Commit 3.3: Visibility selection for layout and eval
 - Implement per-node visibility flags for current frame:
   - range checks
   - switch active child selection
 - Ensure invisible nodes are treated as `display:none` for layout.
 - Validation: canonical verify command set.
 
-Commit 3.4: DFS evaluator core and context stack
+- [ ] Commit 3.4: DFS evaluator core and context stack
 - Implement inherited transform/opacity stack.
 - Emit `EvaluatedLeaf` entries (compact ids, smallvec fields).
 - Preallocate and reuse vectors per frame (no allocations after warmup).
 - Validation: canonical verify command set.
 
-Commit 3.5: Group isolation tagging + `RenderUnit` emission
+- [ ] Commit 3.5: Group isolation tagging + `RenderUnit` emission
 - Implement rules:
   - isolate only if mask/pass effects/transition requires isolation
 - Build `units: Vec<RenderUnit>` in painter order.
 - Validation: canonical verify command set.
 
-Commit 3.6: Transition resolution model
+- [ ] Commit 3.6: Transition resolution model
 - Implement `TransitionBinding` and `ResolvedTransition`.
 - Implement `transition_in/out` progress and easing.
 - Implement `Sequence` overlap window evaluation behavior.
 - Validation: canonical verify command set.
 
-Commit 3.7: Effect binding and resolved param arrays
+- [ ] Commit 3.7: Effect binding and resolved param arrays
 - Implement `EffectKindId` binding, `ParamId` mapping, `AnimParam`, `ResolvedParam`.
 - Add registry binding rule: kind->impl lookup is id-indexed.
 - Validation: canonical verify command set.
 
-Commit 3.8: Hot-loop allocation gate test (alloc-track)
+- [ ] Commit 3.8: Hot-loop allocation gate test (alloc-track)
 - Add a representative scene fixture and a test that asserts 0 allocations per frame after warmup.
 - Validation: canonical verify command set.
 
