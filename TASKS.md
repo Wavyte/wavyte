@@ -54,7 +54,7 @@ The repo runs all “CI” locally via scripts in `scripts/` (no GitHub Actions 
   - Add `wavyte_v03_imp_guideline.md` and `wavyte_v03_proposal.md` for historical reference.
   - Validation: canonical verify command set.
 
-- [ ] Commit 0.2: Add release verify script
+- [x] Commit 0.2: Add release verify script
   - Add `scripts/verify_release.sh` that runs the canonical verify command set (release-only).
   - Add `scripts/` docs in `README.md` for how to use it.
   - Validation: run `bash scripts/verify_release.sh`.

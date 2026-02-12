@@ -119,6 +119,16 @@ ffmpeg -version
 ffprobe -version
 ```
 
+## Local verification (release-only)
+
+This repo runs its verification locally via scripts (we avoid hosted CI for cost reasons).
+
+Run the full release verification suite:
+
+```bash
+bash scripts/verify_release.sh
+```
+
 ## Quick start
 
 Run core examples:
