@@ -360,10 +360,11 @@ Goal: flip exports to v0.3, ship production-ready crate, and validate publish dr
 - Update `wavyte/tests/` and `wavyte/examples/` to v0.3-only (no v0.2 API usage).
 - Validation: canonical verify command set.
 
-- [ ] Commit 8.5: Hardening pass (docs, errors, determinism)
+- [x] Commit 8.5: Hardening pass (docs, errors, determinism)
 - Ensure all public APIs have docs.
 - Ensure validation errors are structured and actionable.
 - Ensure plan determinism and fingerprints are stable.
+- Remove v0.2.x code/test vestiges from the repo tree (v0.3-only branch endpoint).
 - Validation: canonical verify command set.
 
 - [ ] Commit 8.6: Version bump to `0.3.0` and docs update

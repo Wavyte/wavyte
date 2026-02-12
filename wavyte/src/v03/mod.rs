@@ -4,6 +4,9 @@
 //! - [`crate::v03::scene::composition::Composition`] (serde boundary + schema validation)
 //! - [`crate::v03::session::render_session::RenderSession`] (session-oriented rendering)
 
+// v0.3 contains a lot of schema/runtime IR scaffolding that is only exercised by specific scene
+// features and serde entrypoints. Keep `dead_code` warnings local to v0.3 so we can keep
+// `clippy -D warnings` clean without forcing premature removals of planned-but-disabled structures.
 #![allow(dead_code)]
 
 pub(crate) mod animation;
