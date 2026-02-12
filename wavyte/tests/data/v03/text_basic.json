@@ -1,0 +1,23 @@
+{
+  "version": "0.3",
+  "canvas": { "width": 512, "height": 256 },
+  "fps": { "num": 30, "den": 1 },
+  "duration": 60,
+  "assets": {
+    "title": {
+      "text": {
+        "text": "wavyte v0.3",
+        "font_source": "fonts/Inconsolata-Regular.ttf",
+        "size_px": 64,
+        "max_width_px": 480,
+        "color": "#ffffff"
+      }
+    }
+  },
+  "root": {
+    "id": "root",
+    "kind": { "leaf": { "asset": "title" } },
+    "range": [0, 60]
+  }
+}
+

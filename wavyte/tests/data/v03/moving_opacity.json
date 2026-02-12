@@ -1,0 +1,16 @@
+{
+  "version": "0.3",
+  "canvas": { "width": 64, "height": 64 },
+  "fps": { "num": 30, "den": 1 },
+  "duration": 16,
+  "assets": {
+    "solid": { "solid_rect": { "color": "#2e7dff" } }
+  },
+  "root": {
+    "id": "root",
+    "kind": { "leaf": { "asset": "solid" } },
+    "range": [0, 16],
+    "opacity": { "expr": "=time.progress" }
+  }
+}
+
