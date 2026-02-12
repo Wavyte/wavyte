@@ -279,7 +279,7 @@ Goal: pooled execution of DAG plan with parallel scheduling and correct kernels.
 - Optional parallel op execution when safe.
 - Validation: canonical verify command set.
 
-- [ ] Commit 6.3: vello_cpu draw implementation for leaf draws
+- [x] Commit 6.3: vello_cpu draw implementation for leaf draws
 - Implement draw ops for image/svg/text/path/video/solidrect/gradient/noise (as available).
 - Keep caches out of hot path except bounded first-use caches.
 - Validation: canonical verify command set.

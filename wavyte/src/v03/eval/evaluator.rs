@@ -8,6 +8,7 @@ use crate::v03::eval::visibility::{VisibilityState, compute_visibility};
 use crate::v03::expression::program::ExprProgram;
 use crate::v03::expression::vm::VmError;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx};
+use crate::v03::layout::RectPx;
 use crate::v03::layout::taffy_bridge::TaffyBridge;
 use crate::v03::normalize::ir::{
     CollectionModeIR, CompositionIR, NodeIR, NodeKindIR, NodePropsIR, TransitionKindIR,
@@ -27,12 +28,18 @@ pub(crate) struct EvaluatedGraph {
     ///
     /// For nodes that emit no leaves (or are not visible), the range is `0..0`.
     pub(crate) node_leaf_ranges: Vec<Range<usize>>,
+    /// Per-node layout rectangles for this frame.
+    ///
+    /// Nodes that do not participate in layout keep the default rect.
+    pub(crate) layout_rects: Vec<RectPx>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct EvaluatedLeaf {
     pub(crate) node: NodeIdx,
     pub(crate) asset: AssetIdx,
+    /// Node-local sampling frame for time-mapped assets (video/audio).
+    pub(crate) local_frame: u64,
     pub(crate) world_transform: Affine,
     pub(crate) opacity: f32,
     pub(crate) group_stack: SmallVec<[NodeIdx; 4]>,
@@ -122,6 +129,7 @@ impl Evaluator {
                 groups: Vec::new(),
                 units: Vec::new(),
                 node_leaf_ranges: Vec::new(),
+                layout_rects: Vec::new(),
             },
             group_stack: Vec::with_capacity(8),
             group_frames: Vec::with_capacity(8),
@@ -168,6 +176,11 @@ impl Evaluator {
         self.graph.units.clear();
         self.graph.node_leaf_ranges.clear();
         self.graph.node_leaf_ranges.resize(ir.nodes.len(), 0..0);
+        self.graph.layout_rects.clear();
+        self.graph.layout_rects.reserve(ir.nodes.len());
+        self.graph
+            .layout_rects
+            .extend(self.layout.layout_rects.iter().copied());
         self.group_stack.clear();
         self.group_frames.clear();
         self.isolated_group_stack.clear();
@@ -266,6 +279,7 @@ impl Evaluator {
                             self.graph.leaves.push(EvaluatedLeaf {
                                 node: idx,
                                 asset: *asset,
+                                local_frame: frame,
                                 world_transform: world,
                                 opacity: opacity as f32,
                                 group_stack: gs,

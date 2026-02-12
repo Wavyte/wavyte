@@ -1,0 +1,1219 @@
+use crate::assets::decode::{decode_image, parse_svg};
+use crate::assets::media::{VideoSourceInfo, decode_video_frame_rgba8, probe_video};
+use crate::assets::store::{TextBrushRgba8, TextLayoutEngine, normalize_rel_path};
+use crate::foundation::core::{Affine, Rgba8Premul};
+use crate::foundation::error::{WavyteError, WavyteResult};
+use crate::v03::compile::plan::{
+    MaskGenSource, OpKind, RenderPlan, SurfaceDesc, SurfaceId, UnitKey,
+};
+use crate::v03::eval::evaluator::{EvaluatedGraph, EvaluatedLeaf};
+use crate::v03::normalize::intern::StringInterner;
+use crate::v03::normalize::ir::{AssetIR, CompositionIR, ShapeIR, VarValueIR};
+use crate::v03::render::backend::{FrameRGBA, RenderBackendV03};
+use crate::v03::render::scheduler::DagScheduler;
+use crate::v03::render::surface_pool::{SurfacePool, SurfacePoolOpts};
+use kurbo::Shape;
+use smallvec::SmallVec;
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CpuBackendOpts {
+    pub(crate) pool: SurfacePoolOpts,
+    pub(crate) clear_rgba: Option<[u8; 4]>,
+}
+
+#[derive(Clone)]
+struct ImagePaint {
+    paint: vello_cpu::Image,
+    w: u32,
+    h: u32,
+}
+
+#[derive(Clone)]
+struct SvgAssetCache {
+    tree: Arc<usvg::Tree>,
+}
+
+#[derive(Clone)]
+struct TextAssetCache {
+    layout: Arc<parley::Layout<TextBrushRgba8>>,
+    font: vello_cpu::peniko::FontData,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SvgRasterKey {
+    asset: u32,
+    w: u32,
+    h: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct NoiseKey {
+    seed: u64,
+    w: u32,
+    h: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct GradientKey {
+    start: [u8; 4],
+    end: [u8; 4],
+    w: u32,
+    h: u32,
+}
+
+struct VideoFrameDecoder {
+    info: Arc<VideoSourceInfo>,
+    frame_cache: HashMap<u64, vello_cpu::Image>,
+    lru: VecDeque<u64>,
+    capacity: usize,
+}
+
+impl VideoFrameDecoder {
+    fn new(info: Arc<VideoSourceInfo>) -> Self {
+        let capacity = std::env::var("WAVYTE_VIDEO_CACHE_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(64);
+        Self {
+            info,
+            frame_cache: HashMap::new(),
+            lru: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn decode_at(&mut self, source_time_s: f64) -> WavyteResult<vello_cpu::Image> {
+        let key = self.key_for_time(source_time_s);
+        if let Some(img) = self.frame_cache.get(&key).cloned() {
+            self.touch(key);
+            return Ok(img);
+        }
+
+        let rgba = decode_video_frame_rgba8(&self.info, source_time_s)?;
+        let image = rgba_straight_to_image_premul(&rgba, self.info.width, self.info.height)?;
+        self.insert_frame(key, image.clone());
+        Ok(image)
+    }
+
+    fn key_for_time(&self, source_time_s: f64) -> u64 {
+        ((source_time_s.max(0.0)) * 1000.0).round() as u64
+    }
+
+    fn insert_frame(&mut self, key: u64, image: vello_cpu::Image) {
+        self.frame_cache.insert(key, image);
+        self.touch(key);
+        while self.lru.len() > self.capacity {
+            if let Some(old) = self.lru.pop_front() {
+                self.frame_cache.remove(&old);
+            }
+        }
+    }
+
+    fn touch(&mut self, key: u64) {
+        if let Some(pos) = self.lru.iter().position(|x| *x == key) {
+            self.lru.remove(pos);
+        }
+        self.lru.push_back(key);
+    }
+}
+
+/// v0.3 CPU backend powered by `vello_cpu` for vector/text rasterization.
+pub(crate) struct CpuBackendV03 {
+    assets_root: PathBuf,
+    opts: CpuBackendOpts,
+
+    pool: Option<SurfacePool>,
+    ctx: Option<vello_cpu::RenderContext>,
+
+    image_cache: Vec<Option<ImagePaint>>,
+    svg_cache: Vec<Option<SvgAssetCache>>,
+    svg_raster_cache: HashMap<SvgRasterKey, vello_cpu::Image>,
+    path_cache: Vec<Option<crate::foundation::core::BezPath>>,
+    text_cache: Vec<Option<TextAssetCache>>,
+    text_engine: TextLayoutEngine,
+
+    noise_cache: HashMap<NoiseKey, vello_cpu::Image>,
+    gradient_cache: HashMap<GradientKey, vello_cpu::Image>,
+
+    video_decoders: Vec<Option<VideoFrameDecoder>>,
+}
+
+impl CpuBackendV03 {
+    pub(crate) fn new(assets_root: impl Into<PathBuf>, opts: CpuBackendOpts) -> Self {
+        Self {
+            assets_root: assets_root.into(),
+            pool: Some(SurfacePool::new(opts.pool)),
+            opts,
+            ctx: None,
+            image_cache: Vec::new(),
+            svg_cache: Vec::new(),
+            svg_raster_cache: HashMap::new(),
+            path_cache: Vec::new(),
+            text_cache: Vec::new(),
+            text_engine: TextLayoutEngine::new(),
+            noise_cache: HashMap::new(),
+            gradient_cache: HashMap::new(),
+            video_decoders: Vec::new(),
+        }
+    }
+
+    fn ensure_asset_slots(&mut self, ir: &CompositionIR) {
+        let n = ir.assets.len();
+        if self.image_cache.len() != n {
+            self.image_cache.resize_with(n, || None);
+        }
+        if self.svg_cache.len() != n {
+            self.svg_cache.resize_with(n, || None);
+        }
+        if self.path_cache.len() != n {
+            self.path_cache.resize_with(n, || None);
+        }
+        if self.text_cache.len() != n {
+            self.text_cache.resize_with(n, || None);
+        }
+        if self.video_decoders.len() != n {
+            self.video_decoders.resize_with(n, || None);
+        }
+    }
+
+    fn with_ctx_mut<R>(
+        &mut self,
+        width: u16,
+        height: u16,
+        f: impl FnOnce(&mut Self, &mut vello_cpu::RenderContext) -> WavyteResult<R>,
+    ) -> WavyteResult<R> {
+        let mut ctx = match self.ctx.take() {
+            None => vello_cpu::RenderContext::new(width, height),
+            Some(ctx) if ctx.width() == width && ctx.height() == height => ctx,
+            Some(_) => vello_cpu::RenderContext::new(width, height),
+        };
+        ctx.reset();
+        let out = f(self, &mut ctx)?;
+        self.ctx = Some(ctx);
+        Ok(out)
+    }
+
+    fn read_bytes(&self, rel: &str) -> WavyteResult<Vec<u8>> {
+        let norm = normalize_rel_path(rel)?;
+        let p = self.assets_root.join(Path::new(&norm));
+        std::fs::read(&p).map_err(|e| {
+            WavyteError::evaluation(format!("failed to read asset '{}': {e}", p.display()))
+        })
+    }
+
+    fn image_paint_for(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        asset_i: usize,
+    ) -> WavyteResult<ImagePaint> {
+        if let Some(p) = self.image_cache.get(asset_i).and_then(|x| x.clone()) {
+            return Ok(p);
+        }
+        let AssetIR::Image { source } = &ir.assets[asset_i] else {
+            return Err(WavyteError::evaluation("asset is not an image"));
+        };
+        let bytes = self.read_bytes(interner.get(*source))?;
+        let prepared = decode_image(&bytes)?;
+        let pixmap =
+            pixmap_from_premul_bytes(&prepared.rgba8_premul, prepared.width, prepared.height)?;
+        let paint = vello_cpu::Image {
+            image: vello_cpu::ImageSource::Pixmap(Arc::new(pixmap)),
+            sampler: vello_cpu::peniko::ImageSampler::default(),
+        };
+        let out = ImagePaint {
+            paint,
+            w: prepared.width,
+            h: prepared.height,
+        };
+        self.image_cache[asset_i] = Some(out.clone());
+        Ok(out)
+    }
+
+    fn svg_tree_for(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        asset_i: usize,
+    ) -> WavyteResult<SvgAssetCache> {
+        if let Some(t) = self.svg_cache.get(asset_i).and_then(|x| x.clone()) {
+            return Ok(t);
+        }
+        let AssetIR::Svg { source } = &ir.assets[asset_i] else {
+            return Err(WavyteError::evaluation("asset is not an svg"));
+        };
+        let bytes = self.read_bytes(interner.get(*source))?;
+        let prepared = parse_svg(&bytes)?;
+        let out = SvgAssetCache {
+            tree: prepared.tree,
+        };
+        self.svg_cache[asset_i] = Some(out.clone());
+        Ok(out)
+    }
+
+    fn svg_paint_for(
+        &mut self,
+        tree: &usvg::Tree,
+        asset_i: usize,
+        transform: Affine,
+    ) -> WavyteResult<(vello_cpu::Image, f64, f64, Affine)> {
+        let (w, h, transform_adjust) =
+            crate::assets::svg_raster::svg_raster_params(tree, transform)?;
+        let key = SvgRasterKey {
+            asset: asset_i as u32,
+            w,
+            h,
+        };
+        if let Some(img) = self.svg_raster_cache.get(&key).cloned() {
+            return Ok((img, w as f64, h as f64, transform_adjust));
+        }
+        let rgba = crate::assets::svg_raster::rasterize_svg_to_premul_rgba8(tree, w, h)?;
+        let img = rgba_premul_to_image(&rgba, w, h)?;
+        self.svg_raster_cache.insert(key, img.clone());
+        Ok((img, w as f64, h as f64, transform_adjust))
+    }
+
+    fn path_for(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        asset_i: usize,
+    ) -> WavyteResult<crate::foundation::core::BezPath> {
+        if let Some(p) = self.path_cache.get(asset_i).and_then(|x| x.clone()) {
+            return Ok(p);
+        }
+        let AssetIR::Path { svg_path_d } = &ir.assets[asset_i] else {
+            return Err(WavyteError::evaluation("asset is not a path"));
+        };
+        let d = interner.get(*svg_path_d);
+        let bp = crate::foundation::core::BezPath::from_svg(d.trim())
+            .map_err(|e| WavyteError::validation(format!("invalid svg_path_d: {e}")))?;
+        self.path_cache[asset_i] = Some(bp.clone());
+        Ok(bp)
+    }
+
+    fn text_for(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        asset_i: usize,
+    ) -> WavyteResult<TextAssetCache> {
+        if let Some(t) = self.text_cache.get(asset_i).and_then(|x| x.clone()) {
+            return Ok(t);
+        }
+        let AssetIR::Text {
+            text,
+            font_source,
+            size_px,
+            max_width_px,
+            color,
+        } = &ir.assets[asset_i]
+        else {
+            return Err(WavyteError::evaluation("asset is not text"));
+        };
+
+        let font_bytes = self.read_bytes(interner.get(*font_source))?;
+        let brush = match color {
+            Some(VarValueIR::Color(c)) => TextBrushRgba8 {
+                r: c.r,
+                g: c.g,
+                b: c.b,
+                a: c.a,
+            },
+            _ => TextBrushRgba8 {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+        };
+        let layout = self.text_engine.layout_plain(
+            interner.get(*text),
+            &font_bytes,
+            *size_px as f32,
+            brush,
+            max_width_px.map(|v| v as f32),
+        )?;
+
+        let font = vello_cpu::peniko::FontData::new(vello_cpu::peniko::Blob::from(font_bytes), 0);
+        let out = TextAssetCache {
+            layout: Arc::new(layout),
+            font,
+        };
+        self.text_cache[asset_i] = Some(out.clone());
+        Ok(out)
+    }
+
+    fn noise_paint(&mut self, seed: u64, w: u32, h: u32) -> WavyteResult<vello_cpu::Image> {
+        let key = NoiseKey { seed, w, h };
+        if let Some(img) = self.noise_cache.get(&key).cloned() {
+            return Ok(img);
+        }
+        let mut bytes = vec![0u8; (w as usize).saturating_mul(h as usize).saturating_mul(4)];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = ((y as usize) * (w as usize) + (x as usize)) * 4;
+                let v = hash_u32(seed, x, y) as u8;
+                bytes[idx] = v;
+                bytes[idx + 1] = v;
+                bytes[idx + 2] = v;
+                bytes[idx + 3] = 255;
+            }
+        }
+        let img = rgba_premul_to_image(&bytes, w, h)?;
+        self.noise_cache.insert(key, img.clone());
+        Ok(img)
+    }
+
+    fn gradient_paint(
+        &mut self,
+        start: Rgba8Premul,
+        end: Rgba8Premul,
+        w: u32,
+        h: u32,
+    ) -> WavyteResult<vello_cpu::Image> {
+        let key = GradientKey {
+            start: [start.r, start.g, start.b, start.a],
+            end: [end.r, end.g, end.b, end.a],
+            w,
+            h,
+        };
+        if let Some(img) = self.gradient_cache.get(&key).cloned() {
+            return Ok(img);
+        }
+        let mut bytes = vec![0u8; (w as usize).saturating_mul(h as usize).saturating_mul(4)];
+        let h1 = (h.max(1) - 1) as f32;
+        for y in 0..h {
+            let t = if h1 <= 0.0 { 0.0 } else { (y as f32) / h1 };
+            let lerp = |a: u8, b: u8| -> u8 {
+                let af = a as f32;
+                let bf = b as f32;
+                (af + (bf - af) * t).round().clamp(0.0, 255.0) as u8
+            };
+            let c = [
+                lerp(start.r, end.r),
+                lerp(start.g, end.g),
+                lerp(start.b, end.b),
+                lerp(start.a, end.a),
+            ];
+            for x in 0..w {
+                let idx = ((y as usize) * (w as usize) + (x as usize)) * 4;
+                bytes[idx..idx + 4].copy_from_slice(&c);
+            }
+        }
+        let img = rgba_premul_to_image(&bytes, w, h)?;
+        self.gradient_cache.insert(key, img.clone());
+        Ok(img)
+    }
+
+    fn video_paint_for(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        asset_i: usize,
+        local_frame: u64,
+    ) -> WavyteResult<ImagePaint> {
+        let AssetIR::Video {
+            source,
+            trim_start_sec,
+            trim_end_sec,
+            playback_rate,
+        } = &ir.assets[asset_i]
+        else {
+            return Err(WavyteError::evaluation("asset is not video"));
+        };
+
+        if self.video_decoders[asset_i].is_none() {
+            let rel = interner.get(*source);
+            let norm = normalize_rel_path(rel)?;
+            let p = self.assets_root.join(Path::new(&norm));
+            let info = probe_video(&p)?;
+            self.video_decoders[asset_i] = Some(VideoFrameDecoder::new(Arc::new(info)));
+        }
+        let decoder = self.video_decoders[asset_i]
+            .as_mut()
+            .ok_or_else(|| WavyteError::evaluation("video decoder missing"))?;
+
+        let fps = ir.fps;
+        let timeline_t = (local_frame as f64) * (f64::from(fps.den) / f64::from(fps.num));
+        let mut src_t = (*trim_start_sec) + timeline_t * (*playback_rate);
+        if let Some(end) = trim_end_sec {
+            src_t = src_t.min(end.max(*trim_start_sec));
+        }
+        src_t = src_t.max(0.0);
+
+        let paint = decoder.decode_at(src_t)?;
+        let out = ImagePaint {
+            paint,
+            w: decoder.info.width,
+            h: decoder.info.height,
+        };
+        Ok(out)
+    }
+
+    fn leaf_paint_size(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        eval: &EvaluatedGraph,
+        leaf: &EvaluatedLeaf,
+    ) -> WavyteResult<(f64, f64)> {
+        let node = &ir.nodes[leaf.node.0 as usize];
+        if node.layout.is_some() {
+            let r = eval
+                .layout_rects
+                .get(leaf.node.0 as usize)
+                .copied()
+                .unwrap_or_default();
+            let w = r.w as f64;
+            let h = r.h as f64;
+            if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
+                return Ok((w, h));
+            }
+        }
+
+        let a = &ir.assets[leaf.asset.0 as usize];
+        match a {
+            AssetIR::Image { .. } => {
+                let p = self.image_paint_for(ir, interner, leaf.asset.0 as usize)?;
+                Ok((p.w as f64, p.h as f64))
+            }
+            AssetIR::Svg { .. } => {
+                let t = self.svg_tree_for(ir, interner, leaf.asset.0 as usize)?;
+                let s = t.tree.size();
+                Ok((s.width() as f64, s.height() as f64))
+            }
+            AssetIR::Video { .. } => self
+                .video_decoders
+                .get(leaf.asset.0 as usize)
+                .and_then(|d| d.as_ref())
+                .map(|d| (d.info.width as f64, d.info.height as f64))
+                .ok_or_else(|| {
+                    // Avoid probing/decoding in sizing calls; callers should only ask for size
+                    // when the asset is expected to have been prepared already.
+                    WavyteError::evaluation(
+                        "video intrinsic size unavailable (decoder not prepared)",
+                    )
+                }),
+            AssetIR::SolidRect { .. }
+            | AssetIR::Gradient { .. }
+            | AssetIR::Noise { .. }
+            | AssetIR::Null
+            | AssetIR::Audio { .. }
+            | AssetIR::Path { .. }
+            | AssetIR::Text { .. } => Ok((ir.canvas.width as f64, ir.canvas.height as f64)),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_leaf(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        eval: &EvaluatedGraph,
+        leaf: &EvaluatedLeaf,
+        transform_post: Affine,
+        opacity_mul: f32,
+        ctx: &mut vello_cpu::RenderContext,
+    ) -> WavyteResult<()> {
+        let asset_i = leaf.asset.0 as usize;
+        let asset = &ir.assets[asset_i];
+        let tr = leaf.world_transform * transform_post;
+        let opacity = (leaf.opacity * opacity_mul).clamp(0.0, 1.0);
+
+        // Note: v0.3 does not yet have per-leaf blend modes; the plan currently emits Normal.
+        ctx.set_blend_mode(vello_cpu::peniko::BlendMode::default());
+        ctx.set_paint_transform(vello_cpu::kurbo::Affine::IDENTITY);
+
+        match asset {
+            AssetIR::Null | AssetIR::Audio { .. } => Ok(()),
+            AssetIR::SolidRect { color } => {
+                let c = match color {
+                    Some(VarValueIR::Color(c)) => *c,
+                    _ => Rgba8Premul::from_straight_rgba(255, 255, 255, 255),
+                };
+                let (w, h) = self.leaf_paint_size(ir, interner, eval, leaf)?;
+                ctx.set_transform(affine_to_cpu(tr));
+                ctx.set_paint(vello_cpu::peniko::Color::from_rgba8(c.r, c.g, c.b, c.a));
+                if opacity < 1.0 {
+                    ctx.push_opacity_layer(opacity);
+                }
+                ctx.fill_rect(&vello_cpu::kurbo::Rect::new(0.0, 0.0, w, h));
+                if opacity < 1.0 {
+                    ctx.pop_layer();
+                }
+                Ok(())
+            }
+            AssetIR::Gradient { start, end } => {
+                let s = match start {
+                    VarValueIR::Color(c) => *c,
+                    _ => Rgba8Premul::transparent(),
+                };
+                let e = match end {
+                    VarValueIR::Color(c) => *c,
+                    _ => Rgba8Premul::transparent(),
+                };
+                let (w, h) = self.leaf_paint_size(ir, interner, eval, leaf)?;
+                let iw = w.max(1.0) as u32;
+                let ih = h.max(1.0) as u32;
+                let img = self.gradient_paint(s, e, iw, ih)?;
+
+                ctx.set_transform(affine_to_cpu(tr));
+                ctx.set_paint(img);
+                if opacity < 1.0 {
+                    ctx.push_opacity_layer(opacity);
+                }
+                ctx.fill_rect(&vello_cpu::kurbo::Rect::new(0.0, 0.0, w, h));
+                if opacity < 1.0 {
+                    ctx.pop_layer();
+                }
+                Ok(())
+            }
+            AssetIR::Noise { seed } => {
+                let (w, h) = self.leaf_paint_size(ir, interner, eval, leaf)?;
+                let iw = w.max(1.0) as u32;
+                let ih = h.max(1.0) as u32;
+                let img = self.noise_paint(*seed, iw, ih)?;
+
+                ctx.set_transform(affine_to_cpu(tr));
+                ctx.set_paint(img);
+                if opacity < 1.0 {
+                    ctx.push_opacity_layer(opacity);
+                }
+                ctx.fill_rect(&vello_cpu::kurbo::Rect::new(0.0, 0.0, w, h));
+                if opacity < 1.0 {
+                    ctx.pop_layer();
+                }
+                Ok(())
+            }
+            AssetIR::Image { .. } => {
+                let p = self.image_paint_for(ir, interner, asset_i)?;
+                ctx.set_transform(affine_to_cpu(tr));
+                ctx.set_paint(p.paint);
+                if opacity < 1.0 {
+                    ctx.push_opacity_layer(opacity);
+                }
+                ctx.fill_rect(&vello_cpu::kurbo::Rect::new(
+                    0.0, 0.0, p.w as f64, p.h as f64,
+                ));
+                if opacity < 1.0 {
+                    ctx.pop_layer();
+                }
+                Ok(())
+            }
+            AssetIR::Svg { .. } => {
+                let svg = self.svg_tree_for(ir, interner, asset_i)?;
+                let (img, w, h, transform_adjust) = self.svg_paint_for(&svg.tree, asset_i, tr)?;
+
+                ctx.set_transform(affine_to_cpu(transform_adjust));
+                ctx.set_paint(img);
+                if opacity < 1.0 {
+                    ctx.push_opacity_layer(opacity);
+                }
+                ctx.fill_rect(&vello_cpu::kurbo::Rect::new(0.0, 0.0, w, h));
+                if opacity < 1.0 {
+                    ctx.pop_layer();
+                }
+                Ok(())
+            }
+            AssetIR::Path { .. } => {
+                let path = self.path_for(ir, interner, asset_i)?;
+                ctx.set_transform(affine_to_cpu(tr));
+                ctx.set_paint(vello_cpu::peniko::Color::from_rgba8(255, 255, 255, 255));
+                if opacity < 1.0 {
+                    ctx.push_opacity_layer(opacity);
+                }
+                let cpu_path = bezpath_to_cpu(&path);
+                ctx.fill_path(&cpu_path);
+                if opacity < 1.0 {
+                    ctx.pop_layer();
+                }
+                Ok(())
+            }
+            AssetIR::Text { .. } => {
+                let t = self.text_for(ir, interner, asset_i)?;
+                ctx.set_transform(affine_to_cpu(tr));
+                if opacity < 1.0 {
+                    ctx.push_opacity_layer(opacity);
+                }
+                for line in t.layout.lines() {
+                    for item in line.items() {
+                        let parley::layout::PositionedLayoutItem::GlyphRun(run) = item else {
+                            continue;
+                        };
+                        let brush = run.style().brush;
+                        ctx.set_paint(vello_cpu::peniko::Color::from_rgba8(
+                            brush.r, brush.g, brush.b, brush.a,
+                        ));
+                        let glyphs = run.glyphs().map(|g| vello_cpu::Glyph {
+                            id: g.id,
+                            x: g.x,
+                            y: g.y,
+                        });
+                        ctx.glyph_run(&t.font)
+                            .font_size(run.run().font_size())
+                            .fill_glyphs(glyphs);
+                    }
+                }
+                if opacity < 1.0 {
+                    ctx.pop_layer();
+                }
+                Ok(())
+            }
+            AssetIR::Video { .. } => {
+                let p = self.video_paint_for(ir, interner, asset_i, leaf.local_frame)?;
+                ctx.set_transform(affine_to_cpu(tr));
+                ctx.set_paint(p.paint);
+                if opacity < 1.0 {
+                    ctx.push_opacity_layer(opacity);
+                }
+                ctx.fill_rect(&vello_cpu::kurbo::Rect::new(
+                    0.0, 0.0, p.w as f64, p.h as f64,
+                ));
+                if opacity < 1.0 {
+                    ctx.pop_layer();
+                }
+                Ok(())
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn exec_draw(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        eval: &EvaluatedGraph,
+        unit: UnitKey,
+        leaves: std::ops::Range<usize>,
+        clear_to_transparent: bool,
+        transform_post: Affine,
+        opacity_mul: f32,
+        surfaces: &mut ExecSurfaces<'_>,
+        out: SurfaceId,
+    ) -> WavyteResult<()> {
+        let desc = surfaces.desc(out);
+
+        let dst_idx = out.0 as usize;
+        surfaces.ensure(out, desc)?;
+        if clear_to_transparent {
+            clear_pixmap_to_transparent(surfaces.pixmaps[dst_idx].as_mut().unwrap());
+            self.render_leaves_to(
+                ir,
+                interner,
+                eval,
+                leaves,
+                transform_post,
+                opacity_mul,
+                surfaces.pixmaps[dst_idx].as_mut().unwrap(),
+            )?;
+            return Ok(());
+        }
+
+        // Accumulation draw: `vello_cpu` renders into a fresh buffer, so we render into a temp
+        // surface and then premul-over onto the destination buffer.
+        let mut tmp = surfaces.borrow_temp(desc);
+        clear_pixmap_to_transparent(&mut tmp);
+        self.render_leaves_to(
+            ir,
+            interner,
+            eval,
+            leaves,
+            transform_post,
+            opacity_mul,
+            &mut tmp,
+        )?;
+        premul_over_in_place(
+            surfaces.pixmaps[dst_idx]
+                .as_mut()
+                .unwrap()
+                .data_as_u8_slice_mut(),
+            tmp.data_as_u8_slice(),
+        )?;
+        surfaces.release_temp(desc, tmp);
+        let _ = unit;
+        Ok(())
+    }
+
+    fn exec_mask_gen(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        source: &MaskGenSource,
+        surfaces: &mut ExecSurfaces<'_>,
+        out: SurfaceId,
+    ) -> WavyteResult<()> {
+        let desc = surfaces.desc(out);
+        surfaces.ensure(out, desc)?;
+        let dst_idx = out.0 as usize;
+        let dst = surfaces.pixmaps[dst_idx].as_mut().unwrap();
+        clear_pixmap_to_transparent(dst);
+
+        // Render mask sources as premul RGBA; mask interpretation is done in MaskApply.
+        let width_u16 = dst.width();
+        let height_u16 = dst.height();
+        self.with_ctx_mut(width_u16, height_u16, |this, ctx| {
+            match source {
+                MaskGenSource::Asset(a) => {
+                    let leaf = EvaluatedLeaf {
+                        node: crate::v03::foundation::ids::NodeIdx(0),
+                        asset: *a,
+                        local_frame: 0,
+                        world_transform: Affine::IDENTITY,
+                        opacity: 1.0,
+                        group_stack: SmallVec::new(),
+                    };
+                    let dummy = EvaluatedGraph {
+                        frame: 0,
+                        leaves: Vec::new(),
+                        groups: Vec::new(),
+                        units: Vec::new(),
+                        node_leaf_ranges: Vec::new(),
+                        layout_rects: Vec::new(),
+                    };
+                    this.draw_leaf(ir, interner, &dummy, &leaf, Affine::IDENTITY, 1.0, ctx)?;
+                }
+                MaskGenSource::Shape(shape) => {
+                    ctx.set_transform(vello_cpu::kurbo::Affine::IDENTITY);
+                    ctx.set_paint(vello_cpu::peniko::Color::from_rgba8(255, 255, 255, 255));
+                    match shape {
+                        ShapeIR::Rect { width, height } => {
+                            ctx.fill_rect(&vello_cpu::kurbo::Rect::new(0.0, 0.0, *width, *height));
+                        }
+                        ShapeIR::RoundedRect {
+                            width,
+                            height,
+                            radius,
+                        } => {
+                            let rr = kurbo::RoundedRect::new(0.0, 0.0, *width, *height, *radius);
+                            let mut p = vello_cpu::kurbo::BezPath::new();
+                            for el in rr.path_elements(0.1) {
+                                p.push(el);
+                            }
+                            ctx.fill_path(&p);
+                        }
+                        ShapeIR::Ellipse { rx, ry } => {
+                            let e = kurbo::Ellipse::new((*rx, *ry), (*rx, *ry), 0.0);
+                            let mut p = vello_cpu::kurbo::BezPath::new();
+                            for el in e.path_elements(0.1) {
+                                p.push(el);
+                            }
+                            ctx.fill_path(&p);
+                        }
+                        ShapeIR::Path { svg_path_d } => {
+                            let d = interner.get(*svg_path_d);
+                            let bp = crate::foundation::core::BezPath::from_svg(d.trim()).map_err(
+                                |e| WavyteError::validation(format!("invalid svg_path_d: {e}")),
+                            )?;
+                            let cpu_path = bezpath_to_cpu(&bp);
+                            ctx.fill_path(&cpu_path);
+                        }
+                    }
+                }
+            }
+
+            ctx.flush();
+            ctx.render_to_pixmap(dst);
+            Ok(())
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_leaves_to(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        eval: &EvaluatedGraph,
+        leaves: std::ops::Range<usize>,
+        transform_post: Affine,
+        opacity_mul: f32,
+        dst: &mut vello_cpu::Pixmap,
+    ) -> WavyteResult<()> {
+        let width_u16 = dst.width();
+        let height_u16 = dst.height();
+        self.with_ctx_mut(width_u16, height_u16, |this, ctx| {
+            let end = leaves.end.min(eval.leaves.len());
+            let start = leaves.start.min(end);
+            for leaf in &eval.leaves[start..end] {
+                this.draw_leaf(ir, interner, eval, leaf, transform_post, opacity_mul, ctx)?;
+            }
+            ctx.flush();
+            ctx.render_to_pixmap(dst);
+            Ok(())
+        })
+    }
+}
+
+impl RenderBackendV03 for CpuBackendV03 {
+    fn render_plan(
+        &mut self,
+        ir: &CompositionIR,
+        interner: &StringInterner,
+        eval: &EvaluatedGraph,
+        plan: &RenderPlan,
+    ) -> WavyteResult<FrameRGBA> {
+        self.ensure_asset_slots(ir);
+
+        let mut pool = self
+            .pool
+            .take()
+            .ok_or_else(|| WavyteError::evaluation("cpu backend surface pool missing"))?;
+        let mut surfaces = ExecSurfaces::new(&plan.surfaces, &mut pool);
+        for &root in &plan.roots {
+            surfaces.ensure(root, surfaces.desc(root))?;
+        }
+
+        if let Some(clear) = self.opts.clear_rgba
+            && let Some(root) = plan.roots.first().copied()
+            && let Some(pm) = surfaces.pixmaps[root.0 as usize].as_mut()
+        {
+            clear_pixmap(pm, premul_rgba8(clear));
+        }
+
+        let mut sched = DagScheduler::new(&plan.ops);
+        while let Some(next) = sched.pop_ready() {
+            let op = &plan.ops[next.0 as usize];
+
+            match &op.kind {
+                OpKind::Draw {
+                    unit,
+                    leaves,
+                    clear_to_transparent,
+                    transform_post,
+                    opacity_mul,
+                } => {
+                    self.exec_draw(
+                        ir,
+                        interner,
+                        eval,
+                        *unit,
+                        leaves.clone(),
+                        *clear_to_transparent,
+                        *transform_post,
+                        *opacity_mul,
+                        &mut surfaces,
+                        op.output,
+                    )?;
+                }
+                OpKind::MaskGen { source } => {
+                    self.exec_mask_gen(ir, interner, source, &mut surfaces, op.output)?;
+                }
+                other => {
+                    return Err(WavyteError::evaluation(format!(
+                        "v0.3 cpu backend: op kind not implemented yet: {other:?}"
+                    )));
+                }
+            }
+
+            sched.mark_done(next);
+        }
+
+        let root = plan
+            .roots
+            .first()
+            .copied()
+            .ok_or_else(|| WavyteError::evaluation("plan has no roots"))?;
+        let root_desc = plan.surfaces[root.0 as usize];
+        let root_pixmap = surfaces
+            .pixmaps
+            .get(root.0 as usize)
+            .and_then(|x| x.as_ref())
+            .ok_or_else(|| WavyteError::evaluation("root surface missing"))?;
+
+        let out = FrameRGBA {
+            width: root_desc.width,
+            height: root_desc.height,
+            data: root_pixmap.data_as_u8_slice().to_vec(),
+        };
+
+        surfaces.release_all();
+        drop(surfaces);
+        self.pool = Some(pool);
+        Ok(out)
+    }
+}
+
+struct ExecSurfaces<'a> {
+    descs: &'a [SurfaceDesc],
+    pixmaps: Vec<Option<vello_cpu::Pixmap>>,
+    pool: &'a mut SurfacePool,
+}
+
+impl<'a> ExecSurfaces<'a> {
+    fn new(descs: &'a [SurfaceDesc], pool: &'a mut SurfacePool) -> Self {
+        Self {
+            descs,
+            pixmaps: vec![None; descs.len()],
+            pool,
+        }
+    }
+
+    fn desc(&self, id: SurfaceId) -> SurfaceDesc {
+        self.descs[id.0 as usize]
+    }
+
+    fn ensure(&mut self, id: SurfaceId, desc: SurfaceDesc) -> WavyteResult<()> {
+        let idx = id.0 as usize;
+        if self.pixmaps[idx].is_some() {
+            return Ok(());
+        }
+        self.pixmaps[idx] = Some(self.pool.borrow(desc));
+        Ok(())
+    }
+
+    fn borrow_temp(&mut self, desc: SurfaceDesc) -> vello_cpu::Pixmap {
+        self.pool.borrow(desc)
+    }
+
+    fn release_temp(&mut self, desc: SurfaceDesc, pixmap: vello_cpu::Pixmap) {
+        self.pool.release(desc, pixmap);
+    }
+
+    fn release_all(&mut self) {
+        for (i, slot) in self.pixmaps.iter_mut().enumerate() {
+            let Some(pm) = slot.take() else { continue };
+            let desc = self.descs[i];
+            self.pool.release(desc, pm);
+        }
+    }
+}
+
+fn clear_pixmap(pixmap: &mut vello_cpu::Pixmap, rgba: [u8; 4]) {
+    for px in pixmap.data_as_u8_slice_mut().chunks_exact_mut(4) {
+        px.copy_from_slice(&rgba);
+    }
+}
+
+fn premul_rgba8(rgba: [u8; 4]) -> [u8; 4] {
+    let [r, g, b, a] = rgba;
+    let a16 = u16::from(a);
+    let premul = |c: u8| -> u8 { (((u16::from(c) * a16) + 127) / 255) as u8 };
+    [premul(r), premul(g), premul(b), a]
+}
+
+fn clear_pixmap_to_transparent(pixmap: &mut vello_cpu::Pixmap) {
+    pixmap.data_as_u8_slice_mut().fill(0);
+}
+
+fn affine_to_cpu(a: Affine) -> vello_cpu::kurbo::Affine {
+    vello_cpu::kurbo::Affine::new(a.as_coeffs())
+}
+
+fn bezpath_to_cpu(path: &crate::foundation::core::BezPath) -> vello_cpu::kurbo::BezPath {
+    use kurbo::PathEl;
+
+    let mut out = vello_cpu::kurbo::BezPath::new();
+    for &el in path.elements() {
+        match el {
+            PathEl::MoveTo(p) => out.move_to(vello_cpu::kurbo::Point::new(p.x, p.y)),
+            PathEl::LineTo(p) => out.line_to(vello_cpu::kurbo::Point::new(p.x, p.y)),
+            PathEl::QuadTo(p1, p2) => out.quad_to(
+                vello_cpu::kurbo::Point::new(p1.x, p1.y),
+                vello_cpu::kurbo::Point::new(p2.x, p2.y),
+            ),
+            PathEl::CurveTo(p1, p2, p3) => out.curve_to(
+                vello_cpu::kurbo::Point::new(p1.x, p1.y),
+                vello_cpu::kurbo::Point::new(p2.x, p2.y),
+                vello_cpu::kurbo::Point::new(p3.x, p3.y),
+            ),
+            PathEl::ClosePath => out.close_path(),
+        }
+    }
+    out
+}
+
+fn pixmap_from_premul_bytes(
+    bytes: &[u8],
+    width: u32,
+    height: u32,
+) -> WavyteResult<vello_cpu::Pixmap> {
+    let w: u16 = width
+        .try_into()
+        .map_err(|_| WavyteError::evaluation("pixmap width exceeds u16"))?;
+    let h: u16 = height
+        .try_into()
+        .map_err(|_| WavyteError::evaluation("pixmap height exceeds u16"))?;
+    if bytes.len()
+        != (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4)
+    {
+        return Err(WavyteError::evaluation("pixmap byte len mismatch"));
+    }
+    // Pixmap stores PremulRgba8; our bytes are already premultiplied.
+    let mut pixels = Vec::<vello_cpu::peniko::color::PremulRgba8>::with_capacity(
+        (width as usize) * (height as usize),
+    );
+    for px in bytes.chunks_exact(4) {
+        pixels.push(vello_cpu::peniko::color::PremulRgba8::from_u8_array([
+            px[0], px[1], px[2], px[3],
+        ]));
+    }
+    Ok(vello_cpu::Pixmap::from_parts_with_opacity(
+        pixels, w, h, true,
+    ))
+}
+
+fn premultiply_rgba8_in_place(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3] as u16;
+        if a == 0 {
+            px[0] = 0;
+            px[1] = 0;
+            px[2] = 0;
+            continue;
+        }
+        px[0] = ((px[0] as u16 * a + 127) / 255) as u8;
+        px[1] = ((px[1] as u16 * a + 127) / 255) as u8;
+        px[2] = ((px[2] as u16 * a + 127) / 255) as u8;
+    }
+}
+
+fn rgba_premul_to_image(
+    bytes_premul: &[u8],
+    width: u32,
+    height: u32,
+) -> WavyteResult<vello_cpu::Image> {
+    let pixmap = pixmap_from_premul_bytes(bytes_premul, width, height)?;
+    Ok(vello_cpu::Image {
+        image: vello_cpu::ImageSource::Pixmap(Arc::new(pixmap)),
+        sampler: vello_cpu::peniko::ImageSampler::default(),
+    })
+}
+
+fn rgba_straight_to_image_premul(
+    bytes_rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> WavyteResult<vello_cpu::Image> {
+    let mut tmp = bytes_rgba.to_vec();
+    premultiply_rgba8_in_place(&mut tmp);
+    rgba_premul_to_image(&tmp, width, height)
+}
+
+fn premul_over_in_place(dst: &mut [u8], src: &[u8]) -> WavyteResult<()> {
+    if dst.len() != src.len() || !dst.len().is_multiple_of(4) {
+        return Err(WavyteError::evaluation(
+            "premul_over_in_place expects equal-length rgba8 buffers",
+        ));
+    }
+    for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        let sa = s[3] as u16;
+        if sa == 0 {
+            continue;
+        }
+        let inv = 255u16 - sa;
+        d[3] = add_sat_u8(sa as u8, mul_div255_u8(d[3] as u16, inv));
+        for c in 0..3 {
+            let dc = mul_div255_u8(d[c] as u16, inv);
+            d[c] = add_sat_u8(s[c], dc);
+        }
+    }
+    Ok(())
+}
+
+fn mul_div255_u8(x: u16, y: u16) -> u8 {
+    crate::foundation::math::mul_div255_u8(x, y)
+}
+
+fn add_sat_u8(a: u8, b: u8) -> u8 {
+    a.saturating_add(b)
+}
+
+fn hash_u32(seed: u64, x: u32, y: u32) -> u32 {
+    let mut h = crate::foundation::math::Fnv1a64::new(
+        seed ^ crate::foundation::math::Fnv1a64::OFFSET_BASIS,
+    );
+    h.write_u64(u64::from(x));
+    h.write_u64(u64::from(y));
+    (h.finish() & 0xFFFF_FFFF) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::v03::animation::anim::AnimDef;
+    use crate::v03::compile::compiler::compile_frame;
+    use crate::v03::eval::evaluator::Evaluator;
+    use crate::v03::expression::compile::compile_expr_program;
+    use crate::v03::normalize::pass::normalize;
+    use crate::v03::scene::model::{
+        AssetDef, CanvasDef, CollectionModeDef, CompositionDef, FpsDef, NodeDef, NodeKindDef,
+    };
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn v03_cpu_backend_renders_single_image_leaf() {
+        let mut assets = BTreeMap::new();
+        assets.insert(
+            "img".to_owned(),
+            AssetDef::Image {
+                source: "assets/test_image_1.jpg".to_owned(),
+            },
+        );
+
+        let def = CompositionDef {
+            version: "0.3".to_owned(),
+            canvas: CanvasDef {
+                width: 64,
+                height: 64,
+            },
+            fps: FpsDef { num: 30, den: 1 },
+            duration: 1,
+            seed: 0,
+            variables: BTreeMap::new(),
+            assets,
+            root: NodeDef {
+                id: "root".to_owned(),
+                kind: NodeKindDef::Collection {
+                    mode: CollectionModeDef::Group,
+                    children: vec![NodeDef {
+                        id: "a".to_owned(),
+                        kind: NodeKindDef::Leaf {
+                            asset: "img".to_owned(),
+                        },
+                        range: [0, 1],
+                        transform: Default::default(),
+                        opacity: AnimDef::Constant(1.0),
+                        layout: None,
+                        effects: vec![],
+                        mask: None,
+                        transition_in: None,
+                        transition_out: None,
+                    }],
+                },
+                range: [0, 1],
+                transform: Default::default(),
+                opacity: AnimDef::Constant(1.0),
+                layout: None,
+                effects: vec![],
+                mask: None,
+                transition_in: None,
+                transition_out: None,
+            },
+        };
+
+        let norm = normalize(&def).unwrap();
+        let expr = compile_expr_program(&norm).unwrap();
+        let mut eval = Evaluator::new(expr);
+        let g = eval.eval_frame(&norm.ir, 0).unwrap();
+        let plan = compile_frame(&norm.ir, g);
+
+        let assets_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .to_path_buf();
+        let mut backend = CpuBackendV03::new(assets_root, CpuBackendOpts::default());
+        let frame = backend
+            .render_plan(&norm.ir, &norm.interner, g, &plan)
+            .unwrap();
+
+        assert_eq!(frame.width, 64);
+        assert_eq!(frame.height, 64);
+        assert!(frame.data.iter().any(|&b| b != 0));
+    }
+}

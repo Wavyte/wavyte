@@ -2,5 +2,7 @@
 //!
 //! Phase 6 introduces a pooled CPU backend that executes the v0.3 `RenderPlan` DAG.
 
+pub(crate) mod backend;
+pub(crate) mod cpu;
 pub(crate) mod scheduler;
 pub(crate) mod surface_pool;
