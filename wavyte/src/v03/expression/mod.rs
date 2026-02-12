@@ -8,3 +8,6 @@ pub(crate) mod lower;
 pub(crate) mod parser;
 pub(crate) mod program;
 pub(crate) mod vm;
+
+#[cfg(test)]
+mod perf;

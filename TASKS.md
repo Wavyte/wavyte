@@ -143,7 +143,7 @@ Goal: compiled, typed, id-addressed expressions with topo evaluation and cycle e
 - Reject cycles with readable error paths.
 - Validation: canonical verify command set.
 
-Commit 2.5: Expression perf microbench
+- [x] Commit 2.5: Expression perf microbench
 - Add microbench for N=500 and N=2000 properties.
 - Add a CI gate threshold appropriate for the VPS target.
 - Validation: canonical verify command set.
