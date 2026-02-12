@@ -1,3 +1,4 @@
+use crate::foundation::core::Rgba8Premul;
 use crate::foundation::core::{Canvas, Fps};
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx, VarId};
 use crate::v03::normalize::intern::{InternId, StringInterner};
@@ -53,7 +54,7 @@ pub(crate) enum VarValueIR {
     Bool(bool),
     F64(f64),
     Vec2 { x: f64, y: f64 },
-    HexColor(InternId),
+    Color(Rgba8Premul),
 }
 
 #[derive(Debug, Clone)]

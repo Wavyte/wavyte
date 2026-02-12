@@ -1,4 +1,5 @@
 use crate::v03::animation::anim::Anim;
+use crate::v03::assets::color::ColorDef;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -89,7 +90,7 @@ pub(crate) enum VarDef {
     Bool(bool),
     F64(f64),
     Vec2(Vec2Def),
-    HexColor(String),
+    Color(ColorDef),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,7 +268,7 @@ pub(crate) enum AssetDef {
         #[serde(default)]
         max_width_px: Option<f64>,
         #[serde(default)]
-        color: Option<VarDef>,
+        color: Option<ColorDef>,
     },
     Video {
         source: String,

@@ -107,7 +107,7 @@ Goal: land the boundary/runtime split and build deterministic `CompositionIR` wi
 - Ensure no strings are retained in runtime structs used by eval/compile/render (keep interner only in session/debug layer).
 - Validation: canonical verify command set.
 
-Commit 1.7: Implement v0.3 `Color` boundary + runtime representation
+- [x] Commit 1.7: Implement v0.3 `Color` boundary + runtime representation
 - Define `Color` boundary forms and normalize to runtime-friendly representation.
 - Add stable conversion to premul RGBA used by render.
 - Validation: canonical verify command set.

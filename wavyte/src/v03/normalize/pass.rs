@@ -1,5 +1,6 @@
 use crate::foundation::core::{Canvas, Fps};
 use crate::v03::animation::anim::{Anim, AnimTagged};
+use crate::v03::assets::color::ColorDef;
 use crate::v03::foundation::ids::{AssetIdx, NodeIdx, VarId};
 use crate::v03::normalize::intern::{InternId, StringInterner};
 use crate::v03::normalize::ir::{
@@ -62,7 +63,7 @@ pub(crate) fn normalize(def: &CompositionDef) -> Result<NormalizedComposition, N
         let key_i = interner.intern(k);
         var_key_by_id.push(key_i);
         var_id_by_key.insert(key_i, id);
-        vars.push(normalize_var_value(v, &mut interner));
+        vars.push(normalize_var_value(v));
     }
 
     // Nodes: DFS preorder allocation is deterministic.
@@ -132,7 +133,7 @@ fn normalize_asset(a: &AssetDef, interner: &mut StringInterner) -> AssetIR {
             font_source: interner.intern(font_source),
             size_px: *size_px,
             max_width_px: *max_width_px,
-            color: color.as_ref().map(|c| normalize_var_value(c, interner)),
+            color: color.as_ref().map(normalize_color_value),
         },
         AssetDef::Video {
             source,
@@ -160,13 +161,17 @@ fn normalize_asset(a: &AssetDef, interner: &mut StringInterner) -> AssetIR {
     }
 }
 
-fn normalize_var_value(v: &VarDef, interner: &mut StringInterner) -> VarValueIR {
+fn normalize_var_value(v: &VarDef) -> VarValueIR {
     match v {
         VarDef::Bool(b) => VarValueIR::Bool(*b),
         VarDef::F64(x) => VarValueIR::F64(*x),
         VarDef::Vec2(v) => VarValueIR::Vec2 { x: v.x, y: v.y },
-        VarDef::HexColor(s) => VarValueIR::HexColor(interner.intern(s)),
+        VarDef::Color(c) => VarValueIR::Color(c.to_rgba8_premul()),
     }
+}
+
+fn normalize_color_value(c: &ColorDef) -> VarValueIR {
+    VarValueIR::Color(c.to_rgba8_premul())
 }
 
 fn normalize_node(
